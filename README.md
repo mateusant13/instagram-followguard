@@ -29,7 +29,7 @@ Extensão para Chrome que mostra **quem não te segue de volta** no Instagram e 
 ## Testes
 
 ```bash
-node --test diff.test.mjs notify.test.mjs
+node --test diff.test.mjs notify.test.mjs partial.test.mjs
 ```
 
 Feito por [@mateusant13](https://github.com/mateusant13).
