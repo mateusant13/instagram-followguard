@@ -37,6 +37,16 @@ let query = '';
 let shown = 0;
 let live = [];
 
+
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function relTime(iso) {
   if (!iso) return 'nunca';
   const d = Date.now() - new Date(iso).getTime();
@@ -56,13 +66,13 @@ function avatarImg(u) {
     // (net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin — the old placeholder bug).
     // hydrateAvatars() fetches the pic with an instagram.com referrer (CDN
     // then answers `cross-origin`) and swaps in a same-origin blob URL.
-    const esc = String(u.profile_pic_url).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-    return `<img class="avatar" data-pic="${esc}" alt="">`;
+    const pic = esc(u.profile_pic_url);
+    return `<img class="avatar" data-pic="${pic}" alt="">`;
   }
   return placeholder(u);
 }
 function placeholder(u) {
-  const letter = (u.username || '?')[0].toUpperCase();
+  const letter = esc((u.username || '?')[0].toUpperCase());
   return `<span class="avatar" style="display:inline-flex;align-items:center;justify-content:center;font-weight:700;color:#fff;background:linear-gradient(135deg,#feda75,#d62976,#962fbf,#4f5bd5)">${letter}</span>`;
 }
 
@@ -107,13 +117,14 @@ function itemHtml(u) {
   const tags = [];
   if (u.is_private) tags.push('<span class="tag private">privado</span>');
   if (u.is_verified) tags.push('<span class="tag verified">✓</span>');
-  const name = u.full_name ? ` — ${u.full_name}` : '';
+  const user = esc(u.username);
+  const full = esc(u.full_name || '');
   return `
-    <div class="item" data-u="${u.username}">
+    <div class="item" data-u="${user}">
       ${avatarImg(u)}
       <div class="who">
-        <b><a href="https://www.instagram.com/${encodeURIComponent(u.username)}/" target="_blank" rel="noopener">${u.username}</a></b>
-        <span title="${u.full_name}">${u.full_name || ''}</span>
+        <b><a href="https://www.instagram.com/${encodeURIComponent(u.username)}/" target="_blank" rel="noopener">${user}</a></b>
+        <span title="${full}">${full}</span>
       </div>
       ${tags.join('')}
     </div>`;
@@ -122,13 +133,14 @@ function itemHtml(u) {
 function eventHtml(e) {
   const tags = [];
   if (e.stillFollowing) tags.push('<span class="tag unfollowed">você segue</span>');
-  const name = e.fullName ? ` — ${e.fullName}` : '';
+  const user = esc(e.username);
+  const full = esc(e.fullName || '');
   return `
-    <div class="item" data-u="${e.username}">
+    <div class="item" data-u="${user}">
       ${avatarImg({ username: e.username, profile_pic_url: e.profilePicUrl })}
       <div class="who">
-        <b><a href="https://www.instagram.com/${encodeURIComponent(e.username)}/" target="_blank" rel="noopener">${e.username}</a></b>
-        <span title="${e.fullName}">${e.fullName || ''}</span>
+        <b><a href="https://www.instagram.com/${encodeURIComponent(e.username)}/" target="_blank" rel="noopener">${user}</a></b>
+        <span title="${full}">${full}</span>
       </div>
       ${tags.join('')}
       <time>${relTime(new Date(e.detectedAt).toISOString())}</time>
@@ -286,7 +298,7 @@ async function load() {
   events = enrichEvents(o['igf.unfollowEvents'] || []);
   render();
   // Panel: auto-sync when data is stale (popup relies on the manual button).
-  if (document.body.classList.contains('panel')) {
+  if (document.body.classList.contains('panel') && settings.consentAt) {
     const staleMs = (settings.refreshMinutes || 60) * 60 * 1000;
     if (!state.lastSyncAt || Date.now() - new Date(state.lastSyncAt).getTime() > staleMs) {
       sendSync();
@@ -344,4 +356,16 @@ chrome.storage.onChanged.addListener((changes, area) => {
   render();
 });
 
-load();
+const deleteBtn = $('delete-data');
+if (deleteBtn) {
+  deleteBtn.addEventListener('click', async () => {
+    if (!confirm('Apagar todos os dados do IG FollowGuard neste navegador?')) return;
+    await chrome.runtime.sendMessage({ type: 'igf-delete-all' });
+    await load();
+  });
+}
+
+
+export { esc, itemHtml };
+
+if (!globalThis.__IGF_SKIP_UI_BOOT__) load();

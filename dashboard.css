@@ -135,6 +135,9 @@ footer {
   border-radius: 6px; padding: 3px 5px; font-size: 11.5px; outline: none;
 }
 .settings input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; }
+.privacy-row { flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 6px; }
+.privacy-note { margin: 0; font-size: 10.5px; line-height: 1.35; color: var(--muted); }
+.btn.ghost.danger { color: var(--bad); border-color: rgba(248,113,113,.35); }
 .error {
   margin: 8px 12px 0; padding: 8px 10px;
   background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.35);

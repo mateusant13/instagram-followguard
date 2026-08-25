@@ -15,6 +15,7 @@ const K = {
   prevFollowers: 'igf.prevFollowers',
   history: 'igf.followHistory',
   events: 'igf.unfollowEvents',
+  snapshotUid: 'igf.snapshotUid',
 };
 const EVENTS_MAX = 100;
 const SYNC_ALARM = 'igf-sync';
@@ -24,7 +25,62 @@ const DEFAULT_SETTINGS = {
   refreshMinutes: 60,
   notificationsEnabled: true,
   autoSync: true,
+  consentAt: null,
 };
+
+/** Account-isolation policy for prevFollowers snapshots (exported for tests). */
+export function evaluateSnapshotPolicy(storedSnapshotUid, currentUid) {
+  const cur = currentUid != null && currentUid !== '' ? String(currentUid) : null;
+  if (!cur) {
+    return { skipDiff: false, skipNotify: false, migrateUid: false };
+  }
+  const stored = storedSnapshotUid != null && storedSnapshotUid !== ''
+    ? String(storedSnapshotUid) : null;
+  if (stored === null) {
+    // Legacy snapshot without uid — diff once, notify once skipped, tag uid.
+    return { skipDiff: false, skipNotify: true, migrateUid: true };
+  }
+  if (stored !== cur) {
+    return { skipDiff: true, skipNotify: true, migrateUid: true };
+  }
+  return { skipDiff: false, skipNotify: false, migrateUid: true };
+}
+
+/** Pure sync snapshot step — diff, baseline, and notify eligibility (tests). */
+export function processSyncSnapshot({
+  storedSnapshotUid,
+  currentUid,
+  prev,
+  followers,
+  following,
+  history,
+  now = Date.now(),
+}) {
+  const policy = evaluateSnapshotPolicy(storedSnapshotUid, currentUid);
+  const fMap = followers instanceof Map ? followers : new Map(Object.entries(followers || {}));
+  const gMap = following instanceof Map ? following : new Map(Object.entries(following || {}));
+  const hist = history || {};
+  let events = [];
+  let newHistory = hist;
+  if (!policy.skipDiff) {
+    const diff = diffAndRecord(prev || {}, fMap, gMap, hist, now);
+    events = diff.events;
+    newHistory = diff.newHistory;
+  }
+  const notifyable = policy.skipNotify ? [] : events.filter((e) => e.stillFollowing);
+  return {
+    events,
+    newHistory: policy.skipDiff ? hist : newHistory,
+    notifyable,
+    snapshotUid: curUid(currentUid),
+    freshBaseline: policy.skipDiff,
+  };
+}
+
+function curUid(uid) {
+  return uid != null && uid !== '' ? String(uid) : null;
+}
+
 
 const emptyState = () => ({
   status: 'idle', // idle | syncing | ok | error
@@ -59,6 +115,17 @@ async function getState() {
 async function setState(patch) {
   const o = await chrome.storage.local.get(K.state);
   await chrome.storage.local.set({ [K.state]: { ...emptyState(), ...(o[K.state] || {}), ...patch } });
+}
+
+
+export async function deleteAllData() {
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all).filter((k) => k.startsWith('igf.'));
+  if (keys.length) await chrome.storage.local.remove(keys);
+  await chrome.storage.local.set({
+    [K.settings]: { ...DEFAULT_SETTINGS },
+    [K.state]: emptyState(),
+  });
 }
 
 function sleep(ms) {
@@ -271,10 +338,18 @@ async function sync(trigger) {
   if (runningSync) return runningSync;
   const run = (async () => {
     const t0 = Date.now();
+    const trig = trigger || 'manual';
     try {
+      const settings0 = await getSettings();
+      if (!settings0.consentAt && trig !== 'manual') {
+        return { ok: false, skipped: 'no-consent' };
+      }
+      if (!settings0.consentAt && trig === 'manual') {
+        await saveSettings({ ...settings0, consentAt: Date.now() });
+      }
       // Cancel any pending auto-retry — a fresh manual/alarm attempt supersedes it.
       await chrome.alarms.clear(RETRY_ALARM);
-      await setState({ status: 'syncing', trigger: trigger || 'manual', error: null, syncProgress: null });
+      await setState({ status: 'syncing', trigger: trig, error: null, syncProgress: null });
       return await withPageTransport(async () => {
       const session = await readSession().catch((err) => err);
       if (session instanceof IgApiError) {
@@ -286,7 +361,7 @@ async function sync(trigger) {
       const st0 = await getState();
       let uid = session.uid;
       let username = st0.ownUsername || null; // runtime-resolved, never hardcoded
-      if (uid && !username) {
+      if (uid && (!username || String(uid) !== String(st0.ownUserId || ''))) {
         username = (await resolveOwnUser(null, session, uid)).username;
       } else if (!uid) {
         if (!username) {
@@ -317,9 +392,15 @@ async function sync(trigger) {
         }),
       ]);
 
-      const stored = await chrome.storage.local.get([K.prevFollowers, K.history]);
-      const prev = stored[K.prevFollowers] || {};
-      const history = stored[K.history] || {};
+      const stored = await chrome.storage.local.get([K.prevFollowers, K.history, K.snapshotUid]);
+      const snapshot = processSyncSnapshot({
+        storedSnapshotUid: stored[K.snapshotUid] ?? null,
+        currentUid: uid,
+        prev: stored[K.prevFollowers] || {},
+        followers,
+        following,
+        history: stored[K.history] || {},
+      });
 
       // --- persist current lists (followers first, then following) ---
       await chrome.storage.local.set({
@@ -327,23 +408,25 @@ async function sync(trigger) {
         [K.following]: Object.fromEntries(following),
       });
 
-      // --- diff: who left, who arrived (pure logic) ---
       const now = Date.now();
-      const { events, newHistory } = diffAndRecord(prev, followers, following, history, now);
 
       // --- prepend events (newest first), cap at EVENTS_MAX ---
       const storedEvents = (await chrome.storage.local.get(K.events))[K.events] || [];
-      const allEvents = mergeEvents(events, storedEvents, EVENTS_MAX);
+      const allEvents = snapshot.freshBaseline
+        ? storedEvents
+        : mergeEvents(snapshot.events, storedEvents, EVENTS_MAX);
 
-      await chrome.storage.local.set({
+      const persist = {
         [K.prevFollowers]: Object.fromEntries(followers),
-        [K.history]: newHistory,
+        [K.history]: snapshot.newHistory,
         [K.events]: allEvents,
-      });
+      };
+      if (snapshot.snapshotUid) persist[K.snapshotUid] = snapshot.snapshotUid;
+      await chrome.storage.local.set(persist);
       await clearPartials(); // sync complete — no resume needed anymore
 
       // --- notifications for people we still follow who stopped following us ---
-      const notifyable = events.filter((e) => e.stillFollowing);
+      const notifyable = snapshot.notifyable;
       if (notifyable.length && settings.notificationsEnabled) {
         try {
           await notifyUnfollows(notifyable);
@@ -367,7 +450,7 @@ async function sync(trigger) {
         incomplete: false,
         retryN: 0,
       });
-      return { ok: true, following: following.size, followers: followers.size, notFollowingBack: notFollowingBack.length, newEvents: events.length };
+      return { ok: true, following: following.size, followers: followers.size, notFollowingBack: notFollowingBack.length, newEvents: snapshot.events.length };
       });
     } catch (err) {
       const msg = err instanceof IgApiError ? err.message : String(err && err.message || err).slice(0, 200);
@@ -462,14 +545,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.runtime.onInstalled.addListener(async (details) => {
   await scheduleAlarm();
   if (details.reason === 'install') {
-    await sync('install');
+    const s = await getSettings();
+    if (s.consentAt) await sync('install');
   }
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await scheduleAlarm();
   const s = await getSettings();
-  if (s.autoSync) sync('startup');
+  if (s.autoSync && s.consentAt) sync('startup');
 });
 
 // ---------------------------------------------------------------------------
@@ -530,9 +614,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return true;
   }
-  if (msg.type === 'igf-reset-history') {
+  if (msg.type === 'igf-delete-all') {
     (async () => {
-      await chrome.storage.local.remove([K.prevFollowers, K.history, K.events]);
+      await deleteAllData();
+      await scheduleAlarm();
       sendResponse({ ok: true });
     })();
     return true;
