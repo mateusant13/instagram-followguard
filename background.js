@@ -554,7 +554,7 @@ async function sync(trigger) {
       if (trig === 'manual') {
         const stCd = await getState();
         if (stCd.status === 'ok') {
-          const hadFree = __omp_shell("!stCd.freeManualRefresh;")
+          const hadFree = !!stCd.freeManualRefresh;
           const cd = manualSyncCooldownInfo(stCd.lastSyncAt, {
             followersCount: stCd.followersCount,
             followingCount: stCd.followingCount,
