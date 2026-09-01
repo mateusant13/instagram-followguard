@@ -27,7 +27,6 @@ const DEFAULT_SETTINGS = {
   notificationsEnabled: true,
   autoSync: true,
   consentAt: null,
-  whitelist: [],
 };
 
 /** Account-isolation policy for prevFollowers snapshots (exported for tests). */
@@ -471,13 +470,29 @@ async function sync(trigger) {
         : mergeEvents(snapshot.events, storedEvents, EVENTS_MAX);
 
       const prevFollowersObj = stored[K.prevFollowers] || {};
-      const newFollowerBatch = snapshot.freshBaseline
-        ? []
-        : detectNewFollowers(prevFollowersObj, followers, now);
+      const hasPrevSnapshot = Object.keys(prevFollowersObj).length > 0;
       const storedNewFollowers = (await chrome.storage.local.get(K.newFollowers))[K.newFollowers] || [];
-      const allNewFollowers = snapshot.freshBaseline
-        ? storedNewFollowers
-        : mergeEvents(newFollowerBatch, storedNewFollowers, EVENTS_MAX);
+      let allNewFollowers;
+      if (snapshot.freshBaseline || !hasPrevSnapshot) {
+        allNewFollowers = [];
+      } else {
+        const newFollowerBatch = detectNewFollowers(prevFollowersObj, followers, now);
+        allNewFollowers = mergeEvents(newFollowerBatch, storedNewFollowers, EVENTS_MAX);
+      }
+      // One-time: clear bogus "everyone is new" flood from first sync with empty prev.
+      const FIX_KEY = 'igf.fixNewFollowersBaseline';
+      const fixDone = (await chrome.storage.local.get(FIX_KEY))[FIX_KEY];
+      if (!fixDone) {
+        const followerKeys = new Set(followers.keys());
+        if (
+          storedNewFollowers.length > 0
+          && storedNewFollowers.length >= followerKeys.size
+          && storedNewFollowers.every((e) => followerKeys.has(e.username))
+        ) {
+          allNewFollowers = [];
+        }
+        await chrome.storage.local.set({ [FIX_KEY]: true });
+      }
 
       const persist = {
         [K.prevFollowers]: Object.fromEntries(followers),
@@ -500,10 +515,7 @@ async function sync(trigger) {
         }
       }
 
-      const wl = new Set((settings.whitelist || []).map((u) => String(u).toLowerCase()));
-      const notFollowingBack = [...following.keys()].filter(
-        (u) => !followers.has(u) && !wl.has(u.toLowerCase()),
-      );
+      const notFollowingBack = [...following.keys()].filter((u) => !followers.has(u));
       await setState({
         status: 'ok',
         lastSyncAt: nowIso(),

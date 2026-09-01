@@ -72,6 +72,11 @@ test('mergeEvents empty stored keeps fresh', () => {
   assert.equal(merged[0].username, 'a');
 });
 
+test('detectNewFollowers empty prev snapshot returns none (baseline)', () => {
+  const next = map({ a: meta(1), b: meta(2) });
+  assert.equal(detectNewFollowers({}, next, 1000).length, 0);
+});
+
 test('detectNewFollowers finds accounts absent from previous snapshot', () => {
   const prev = { a: meta(1) };
   const next = map({ a: meta(1), b: meta(2), c: meta(3) });

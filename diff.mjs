@@ -64,9 +64,10 @@ export function mergeEvents(newEvents, storedEvents, max) {
  * Detect accounts that appeared in the followers list since the last snapshot.
  */
 export function detectNewFollowers(prev, next, now) {
+  const prevObj = prev || {};
+  if (!Object.keys(prevObj).length) return [];
   const events = [];
   const nextMap = next instanceof Map ? next : new Map(Object.entries(next || {}));
-  const prevObj = prev || {};
   for (const [u, meta] of nextMap) {
     if (!prevObj[u]) {
       events.push({

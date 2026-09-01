@@ -100,14 +100,7 @@ header .title small { display: block; font-weight: 400; color: var(--muted); fon
   border-radius: 999px; padding: 3px 8px; font-size: 10.5px; font-weight: 600; cursor: pointer;
 }
 .chip.active { color: var(--text); border-color: var(--accent2); background: rgba(150,47,191,.15); }
-.wl-toggle { font-size: 10.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
-.action-row { display: flex; gap: 4px; }
 .btn.tiny { padding: 3px 8px; font-size: 10.5px; }
-.item .star {
-  background: transparent; border: 0; color: var(--muted); cursor: pointer;
-  font-size: 14px; line-height: 1; padding: 0 2px; flex: none;
-}
-.item .star.on { color: var(--warn); }
 
 /* --- list --- */
 .list { overflow-y: auto; padding: 6px 12px 8px; flex: 1; }
