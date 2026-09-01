@@ -211,6 +211,14 @@ function getLists() {
   return listsCache;
 }
 
+function liveCounts() {
+  const fKeys = Object.keys(followers);
+  const gKeys = Object.keys(following);
+  const fSet = new Set(fKeys);
+  const notBack = gKeys.filter((u) => !fSet.has(u)).length;
+  return { followers: fKeys.length, following: gKeys.length, notBack };
+}
+
 function renderHeader() {
   const pill = el.pill();
   pill.className = 'pill';
@@ -220,12 +228,14 @@ function renderHeader() {
       pill.classList.add('sync');
       if (state.syncProgress) {
         const p = state.syncProgress;
-        const label = p.phase === 'followers' ? 'seguidores' : (p.phase === 'following' ? 'seguindo' : 'listas');
+        const g = Number(p.followingFetched ?? 0);
+        const f = Number(p.followersFetched ?? 0);
+        const phase = p.phase === 'followers' ? '2/2 seguidores' : (p.phase === 'following' ? '1/2 seguindo' : 'listas');
         if (p.segmentPause && p.resumeAt) {
           const sec = Math.max(0, Math.ceil((p.resumeAt - Date.now()) / 1000));
-          t.textContent = `pausa entre blocos… ${label}: ${Number(p.fetched || 0).toLocaleString('pt-BR')} — continua em ${sec}s`;
+          t.textContent = `pausa… ${phase}: seguindo ${g.toLocaleString('pt-BR')} · seguidores ${f.toLocaleString('pt-BR')} — ${sec}s`;
         } else {
-          t.textContent = `sincronizando… ${label}: ${Number(p.fetched || 0).toLocaleString('pt-BR')}`;
+          t.textContent = `sincronizando… ${phase}: seguindo ${g.toLocaleString('pt-BR')} · seguidores ${f.toLocaleString('pt-BR')}`;
         }
       } else {
         t.textContent = 'sincronizando…';
@@ -241,9 +251,10 @@ function renderHeader() {
   }
   el.lastSync().textContent = `última: ${relTime(state.lastSyncAt)}`;
   el.refresh().disabled = state.status === 'syncing';
-  el.cardK().querySelector('.count').textContent = state.notFollowingBackCount;
-  el.cardF().querySelector('.count').textContent = state.followersCount;
-  el.cardM().querySelector('.count').textContent = state.followingCount;
+  const live = state.status === 'syncing' ? liveCounts() : null;
+  el.cardK().querySelector('.count').textContent = live ? live.notBack : state.notFollowingBackCount;
+  el.cardF().querySelector('.count').textContent = live ? live.followers : state.followersCount;
+  el.cardM().querySelector('.count').textContent = live ? live.following : state.followingCount;
 }
 
 function renderSyncHint() {
@@ -474,6 +485,7 @@ function render() {
         renderSyncHint();
       }, 1000);
     }
+    renderHeavy();
     return;
   }
   renderHeavy();
@@ -521,12 +533,12 @@ async function load() {
   events = enrichEvents(o['igf.unfollowEvents'] || []);
   newFollowers = enrichEvents(o['igf.newFollowerEvents'] || []);
   render();
-  // Panel: auto-sync when data is stale (popup relies on the manual button).
-  if (document.body.classList.contains('panel') && settings.consentAt) {
+  // Popup + panel: kick sync when idle and data is missing or stale.
+  if (state.status !== 'syncing') {
     const staleMs = (settings.refreshMinutes || 60) * 60 * 1000;
-    if (!state.lastSyncAt || Date.now() - new Date(state.lastSyncAt).getTime() > staleMs) {
-      sendSync();
-    }
+    const empty = !Object.keys(followers).length && !Object.keys(following).length;
+    const stale = settings.consentAt && (!state.lastSyncAt || Date.now() - new Date(state.lastSyncAt).getTime() > staleMs);
+    if (empty || stale) sendSync(); // manual trigger grants consent on first open
   }
   // Announce the dashboard is live (the injected panel listens; harmless
   // when this page runs as the toolbar popup — posting to self, no receiver).

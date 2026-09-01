@@ -95,25 +95,36 @@
 
   // Anchor the FAB to the right of the settings gear (12px gap).
   const FAB_SIZE = 40;
-  const positionNearSettings = () => {
+  const mountHostNearGear = () => {
     if (!host) return false;
     const gearDiv = findGearDiv();
-    if (gearDiv) {
-      const r = gearDiv.getBoundingClientRect();
-      // FAB's left edge = gear's right edge + 12px.
-      const right = Math.max(8, Math.round(innerWidth - r.right - 12 - FAB_SIZE));
-      const top = Math.max(8, Math.round(r.top + (r.height - FAB_SIZE) / 2));
-      host.style.right = right + 'px';
-      host.style.top = top + 'px';
-      return true;
+    if (!gearDiv || !gearDiv.parentElement) return false;
+    const parent = gearDiv.parentElement;
+    if (host.parentElement !== parent) {
+      parent.insertBefore(host, gearDiv.nextSibling);
     }
-    return false;
+    host.style.cssText =
+      'all:initial;display:inline-flex;align-items:center;vertical-align:middle;' +
+      'margin-left:12px;position:relative;z-index:2;flex:none;';
+    return true;
+  };
+
+  const positionPanelNearFab = (fab) => {
+    if (!panel || !fab) return;
+    const r = fab.getBoundingClientRect();
+    const w = Math.min(372, Math.max(280, innerWidth - 16));
+    const h = Math.min(560, Math.max(320, innerHeight - r.bottom - 20));
+    panel.style.width = w + 'px';
+    panel.style.height = h + 'px';
+    panel.style.top = Math.min(r.bottom + 12, innerHeight - h - 8) + 'px';
+    panel.style.right = Math.max(8, innerWidth - r.right) + 'px';
+    panel.style.left = 'auto';
   };
 
   const buildFab = () => {
     host = document.createElement('div');
     host.id = 'igf-root';
-    host.style.cssText = 'all:initial;position:fixed;right:24px;top:150px;z-index:2147483647;';
+    host.style.cssText = 'all:initial;display:inline-flex;align-items:center;margin-left:12px;position:relative;z-index:2;';
     const shadow = host.attachShadow({ mode: 'open' });
 
     const fab = document.createElement('button');
@@ -137,27 +148,25 @@
         panel.src = chrome.runtime.getURL('panel.html');
         panel.title = 'IG FollowGuard';
         panel.style.cssText =
-          'all:initial;position:fixed;width:372px;height:560px;border:1px solid #2c2f35;' +
+          'all:initial;position:fixed;border:1px solid #2c2f35;' +
           'border-radius:12px;background:#121316;box-shadow:0 10px 40px rgba(0,0,0,.55);' +
           'z-index:2147483647;';
-        // Open below the FAB, sharing its right edge.
-        const top = host.style.top ? parseInt(host.style.top, 10) : 150;
-        panel.style.top = (top + FAB_SIZE + 12) + 'px';
-        panel.style.right = (host.style.right ? parseInt(host.style.right, 10) : 24) + 'px';
-        shadow.appendChild(panel);
+        document.body.appendChild(panel);
+        positionPanelNearFab(fab);
       } else {
-        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        const opening = panel.style.display === 'none';
+        panel.style.display = opening ? 'block' : 'none';
+        if (opening) positionPanelNearFab(fab);
       }
     };
     fab.addEventListener('click', togglePanel);
 
     shadow.appendChild(fab);
-    (document.body || document.documentElement).appendChild(host);
     refreshBadge();
-    // Anchor next to the gear once the header renders (retry briefly).
+    // Mount in the profile header (scrolls with the page — not viewport-sticky).
     let tries = 0;
     const tryAnchor = () => {
-      if (positionNearSettings() || ++tries > 20) return;
+      if (mountHostNearGear() || ++tries > 20) return;
       setTimeout(tryAnchor, 250);
     };
     tryAnchor();
@@ -168,7 +177,10 @@
       host.remove();
       host = null;
     }
-    panel = null;
+    if (panel) {
+      panel.remove();
+      panel = null;
+    }
     panelReady = false;
   };
 

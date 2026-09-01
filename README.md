@@ -7,7 +7,7 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 ## Instalar (primeira vez)
 
 1. **Baixe o ZIP**  
-   No GitHub, clique em **Code** (ou **Código**) → **Download ZIP**.  
+   No GitHub, clique no botão verde **Code** (ou **Código**) → **Download ZIP**.  
    Extraia o arquivo — vai aparecer uma pasta (ex.: `instagram-followguard-main`).
 
 2. **Abra as extensões do Chrome**  
@@ -23,7 +23,8 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 
 5. **Pronto**  
    Fixe o ícone do IG FollowGuard na barra do Chrome se quiser.  
-   Entre no **instagram.com** com sua conta. No **seu perfil**, aparece um botão flutuante; o ícone da extensão abre o painel.
+   A extensão **começa a sincronizar sozinha** assim que é instalada (mantenha uma aba do Instagram aberta).  
+   Entre no **instagram.com** com sua conta. No **seu perfil**, aparece o botão do FollowGuard ao lado da engrenagem; o ícone da extensão abre o painel (a sync já estará em andamento).
 
 ---
 
@@ -31,7 +32,7 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 
 1. Esteja **logado** no Instagram no mesmo Chrome.
 2. Abra o painel (ícone da extensão ou botão no seu perfil).
-3. Toque em **↻ Sincronizar** (ou aguarde — o painel pode sincronizar sozinho).
+3. A sincronização **começa automaticamente** ao instalar e ao abrir o painel. Toque em **↻ Sincronizar** só se quiser forçar de novo.
 4. **Não feche a aba do Instagram** enquanto aparecer “sincronizando…”. Pode deixar em segundo plano.
 
 **Quanto tempo demora?** Depende do tamanho das suas listas. O app busca de **24 em 24** contas, com pausa entre cada página (como alguém rolando a lista no celular). Exemplos aproximados:

@@ -346,7 +346,7 @@ export async function fetchAllUsers(kind, uid, session, { signal, onProgress, re
         out.set(u.username, pick(u));
       }
       retries = 0; // page produced usable data — reset the consecutive-failure budget
-      if (onProgress) onProgress({ kind, fetched: out.size });
+      if (onProgress) onProgress({ kind, fetched: out.size, users: Array.from(out.values()) });
       if (onPart && users.length && nextMaxId) {
         try {
           // Await before advancing: a not-awaited checkpoint write can still

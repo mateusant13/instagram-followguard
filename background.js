@@ -216,6 +216,49 @@ async function clearPartials() {
   } catch { /* best-effort */ }
 }
 
+function usersToObj(users) {
+  const o = {};
+  if (!Array.isArray(users)) return o;
+  for (const u of users) {
+    if (u && u.username) o[u.username] = u;
+  }
+  return o;
+}
+
+function countNotFollowingBack(followingObj, followersObj) {
+  const fKeys = new Set(Object.keys(followersObj || {}));
+  return Object.keys(followingObj || {}).filter((u) => !fKeys.has(u)).length;
+}
+
+function makeListProgressTracker() {
+  const counts = { following: 0, followers: 0 };
+  let publishChain = Promise.resolve();
+  return {
+    counts,
+    onProgress({ kind: k, fetched, users }) {
+      counts[k] = fetched;
+      const patch = { [k === 'following' ? K.following : K.followers]: usersToObj(users) };
+      publishChain = publishChain.then(async () => {
+        await chrome.storage.local.set(patch);
+        const o = await chrome.storage.local.get([K.followers, K.following]);
+        const followersObj = o[K.followers] || {};
+        const followingObj = o[K.following] || {};
+        await setState({
+          syncProgress: {
+            phase: k,
+            fetched,
+            followingFetched: counts.following,
+            followersFetched: counts.followers,
+          },
+          followingCount: Object.keys(followingObj).length,
+          followersCount: Object.keys(followersObj).length,
+          notFollowingBackCount: countNotFollowingBack(followingObj, followersObj),
+        });
+      }).catch(() => {});
+      return publishChain;
+    },
+  };
+}
 // ---------------------------------------------------------------------------
 // Sync: fetch the COMPLETE following + followers lists, diff, notify.
 // ---------------------------------------------------------------------------
@@ -417,10 +460,18 @@ export async function fetchListComplete(kind, uid, session, listOpts, readPartia
         );
       }
       const pauseMs = segmentPauseMsForTests ? segmentPauseMsForTests() : segmentPauseMs();
+      const partialsNow = await readPartialsFn(uid);
+      const resumeNow = partialsNow[kind];
+      const followingFetched = partialsNow.following && Array.isArray(partialsNow.following.users)
+        ? partialsNow.following.users.length : 0;
+      const followersFetched = partialsNow.followers && Array.isArray(partialsNow.followers.users)
+        ? partialsNow.followers.users.length : 0;
       await setState({
         syncProgress: {
           phase: kind,
           fetched,
+          followingFetched,
+          followersFetched,
           segmentPause: true,
           resumeAt: Date.now() + pauseMs,
         },
@@ -429,7 +480,12 @@ export async function fetchListComplete(kind, uid, session, listOpts, readPartia
       await chrome.alarms.create(CONTINUE_ALARM, { delayInMinutes: Math.max(0.05, pauseMs / 60000) });
       await sleep(pauseMs);
       await chrome.alarms.clear(CONTINUE_ALARM);
-      await setState({ syncProgress: { phase: kind, fetched } });
+      const partialsAfter = await readPartialsFn(uid);
+      const followingAfter = partialsAfter.following && Array.isArray(partialsAfter.following.users)
+        ? partialsAfter.following.users.length : 0;
+      const followersAfter = partialsAfter.followers && Array.isArray(partialsAfter.followers.users)
+        ? partialsAfter.followers.users.length : 0;
+      await setState({ syncProgress: { phase: kind, fetched, followingFetched: followingAfter, followersFetched: followersAfter } });
     }
   }
 }
@@ -450,10 +506,11 @@ async function sync(trigger) {
     const trig = trigger || 'manual';
     try {
       const settings0 = await getSettings();
-      if (!settings0.consentAt && trig !== 'manual') {
+      const autoConsent = ['install', 'startup', 'alarm', 'resume', 'continue', 'retry'].includes(trig);
+      if (!settings0.consentAt && !autoConsent && trig !== 'manual') {
         return { ok: false, skipped: 'no-consent' };
       }
-      if (!settings0.consentAt && trig === 'manual') {
+      if (!settings0.consentAt && (trig === 'manual' || autoConsent)) {
         await saveSettings({ ...settings0, consentAt: Date.now() });
       }
       // Cancel any pending auto-retry — a fresh manual/alarm attempt supersedes it.
@@ -489,10 +546,11 @@ async function sync(trigger) {
       // on Instagram and are easier to flag as automation. Progress is persisted
       // per page; each page is checkpointed so a failure/restart resumes.
       const listAbort = new AbortController();
+      const progress = makeListProgressTracker();
       const listOpts = (kind, resume) => ({
         signal: listAbort.signal,
         resume,
-        onProgress: ({ kind: k, fetched }) => setState({ syncProgress: { phase: k, fetched } }),
+        onProgress: (payload) => progress.onProgress(payload),
         onPart: ({ seq, maxId, users }) => savePagePart(kind, uid, seq, maxId, users),
       });
       let following;
@@ -697,7 +755,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   await scheduleAlarm();
   if (details.reason === 'install') {
     const s = await getSettings();
-    if (s.consentAt) await sync('install');
+    if (!s.consentAt) await saveSettings({ ...s, consentAt: Date.now() });
+    sync('install');
   }
 });
 
