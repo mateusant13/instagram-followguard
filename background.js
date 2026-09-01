@@ -4,7 +4,7 @@
 // periodic alarms. Reads ONLY follow/follower relationships.
 'use strict';
 
-import { readSession, fetchAllUsers, IgApiError, buildResume, apiFetch, transientRetry, __setTransport } from './ig_api.mjs';
+import { readSession, fetchAllUsers, IgApiError, buildResume, apiFetch, transientRetry, jitteredPauseMs, __setTransport } from './ig_api.mjs';
 import { diffAndRecord, mergeEvents, detectNewFollowers } from './diff.mjs';
 
 const K = {

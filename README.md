@@ -8,34 +8,33 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 
 1. **Baixe o ZIP**  
    No GitHub, clique no botão verde **Code** (ou **Código**) → **Download ZIP**.  
-   Extraia o arquivo — vai aparecer uma pasta (ex.: `instagram-followguard-main`).
+   Guarde o arquivo `.zip` — **não precisa extrair**.
 
 2. **Abra as extensões do Chrome**  
-   Na barra de endereço do Chrome, cole e Enter:  
-   `chrome://extensions`
+   Na **barra de URL** do Chrome (onde você digita endereços de sites), **digite ou cole**:  
+   `chrome://extensions`  
+   e pressione Enter.
 
 3. **Ative o modo desenvolvedor**  
-   No canto superior direito, ligue a chave **Modo do desenvolvedor**.
+   No canto superior direito, ligue **Modo do desenvolvedor**.
 
 4. **Carregue a extensão**  
-   Clique em **Carregar sem compactação** (ou **Load unpacked**).  
-   Escolha a pasta que você extraiu (a que tem o arquivo `manifest.json` dentro).
+   Clique em **Carregar extensão compactada** (ou **Load packed extension**).  
+   Selecione o arquivo `.zip` que você baixou.
 
 5. **Pronto**  
-   Fixe o ícone do IG FollowGuard na barra do Chrome se quiser.  
-   A extensão **começa a sincronizar sozinha** assim que é instalada (mantenha uma aba do Instagram aberta).  
-   Entre no **instagram.com** com sua conta. No **seu perfil**, aparece o botão do FollowGuard ao lado da engrenagem; o ícone da extensão abre o painel (a sync já estará em andamento).
+   Abra **instagram.com**, entre com sua conta e vá ao **seu perfil** — o botão colorido do IG FollowGuard aparece ao lado da engrenagem. A sincronização **começa sozinha** (mantenha uma aba do Instagram aberta).
 
 ---
 
 ## Primeiro uso
 
-1. Esteja **logado** no Instagram no mesmo Chrome.
-2. Abra o painel (ícone da extensão ou botão no seu perfil).
-3. A sincronização **começa automaticamente** ao instalar e ao abrir o painel. Toque em **↻ Sincronizar** só se quiser forçar de novo.
+1. Com a extensão instalada e logado no Instagram, **agora você pode usar**.
+2. Toque no **botão no seu perfil** ou no **ícone da extensão** para abrir o painel.
+3. A sincronização **começa automaticamente** na instalação e ao abrir o painel. O botão **↻ Sincronizar** fica bloqueado por **15 minutos** após uma sync completa (evita refazer tudo de novo e spammar o Instagram).
 4. **Não feche a aba do Instagram** enquanto aparecer “sincronizando…”. Pode deixar em segundo plano.
 
-**Quanto tempo demora?** Depende do tamanho das suas listas. O app busca de **24 em 24** contas, com pausa entre cada página (como alguém rolando a lista no celular). Exemplos aproximados:
+**Quanto tempo demora?** Depende do tamanho das suas listas. O app busca de **24 em 24** contas, com **pausas variadas** entre cada página (nunca um tempo fixo — pode ser ~1,5 s, ~2,2 s ou ~2,25 s, como alguém rolando a lista no celular). Exemplos aproximados:
 
 | Seguidores + seguindo (total de páginas) | Tempo só de pausas |
 |----------------------------------------|-------------------|
@@ -44,9 +43,9 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 | ~1000 contas (~84 páginas) | ~4–6 minutos |
 | ~20 mil seguidores (~834 páginas) | ~30–50 minutos (continua sozinha) |
 
-**Contas muito grandes (ex.: 20 mil seguidores):** funciona, mas demora. A sincronização **começa e termina sozinha** — a cada **12 mil contas** por lista ela faz uma pausa curta (~90 s) e continua de onde parou, sem precisar clicar em nada. Mantenha a aba do Instagram aberta o tempo todo.
+**Contas muito grandes (ex.: 20 mil seguidores):** funciona, mas demora. A sincronização **começa e termina sozinha** — a cada **12 mil contas** por lista ela faz uma pausa (também variada, ~1,5 min, nunca sempre o mesmo número de segundos) e continua de onde parou, sem precisar clicar em nada. Mantenha a aba do Instagram aberta o tempo todo.
 
-**Pacing não elimina rate limit:** o app já rola devagar (24 contas por vez, pausas entre páginas), mas o Instagram ainda pode pedir para “aguardar” em contas enormes. Isso é limite da plataforma, não bug — a extensão tenta de novo sozinha depois.
+**Pacing não elimina rate limit:** o app já rola devagar (24 contas por vez, pausas irregulares entre páginas), mas o Instagram ainda pode pedir para “aguardar” em contas enormes. Isso é limite da plataforma, não bug — a extensão tenta de novo sozinha depois.
 
 ---
 
@@ -55,8 +54,8 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 **Não apague a extensão** se quiser manter suas listas — **remover apaga tudo** do Chrome.
 
 1. No painel, embaixo: **Exportar backup** → guarde o arquivo `.json`.
-2. Baixe o ZIP novo e **substitua os arquivos na mesma pasta** de antes.
-3. Em `chrome://extensions`, clique em **Recarregar** no IG FollowGuard.
+2. Baixe o ZIP novo (não precisa extrair).
+3. Na **barra de URL**, abra `chrome://extensions` e clique em **Recarregar** no IG FollowGuard — ou remova a versão antiga e use **Carregar extensão compactada** com o ZIP novo.
 
 Se já removeu e instalou de novo: **Importar backup** no painel.
 

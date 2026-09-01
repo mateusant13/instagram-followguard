@@ -47,14 +47,19 @@ export function __setPageDelayMsForTests(v) { pageDelayMs = v; }
 let transport = null;
 export function __setTransport(fn) { transport = fn; }
 
+/** Randomized pause — never a flat interval (adds sub-second jitter). */
+export function jitteredPauseMs(baseMs, factorMin, factorSpread, extraJitterMs = 999) {
+  const factor = factorMin + Math.random() * factorSpread;
+  return Math.round(baseMs * factor + Math.random() * extraJitterMs);
+}
 // Humanized inter-page pause: never a fixed interval. Short gaps (0.6-1.8×
 // base) most of the time, ~10% of pauses are 2-5.5× base — the "hesitating /
 // reading" behavior of a real person scrolling a list.
 function humanPauseMs() {
   if (pageDelayMs <= 0) return 0;
   const r = Math.random();
-  if (r < 0.1) return Math.round(pageDelayMs * (2 + Math.random() * 3.5));
-  return Math.round(pageDelayMs * (0.6 + Math.random() * 1.2));
+  if (r < 0.1) return jitteredPauseMs(pageDelayMs, 2, 3.5);
+  return jitteredPauseMs(pageDelayMs, 0.6, 1.2);
 }
 function backoffFor(code, retries) {
   if (retryBaseMs !== 5000) return retryBaseMs; // test seam
