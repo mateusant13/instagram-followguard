@@ -1,9 +1,9 @@
 {
   "name": "IG FollowGuard",
   "description": "Veja quem não te segue de volta no Instagram, novos seguidores e quem deixou de te seguir. Dados só no seu navegador.",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "manifest_version": 3,
-  "minimum_chrome_version": "102",
+  "minimum_chrome_version": "111",
   "permissions": [
     "cookies",
     "storage",
@@ -23,6 +23,16 @@
     "type": "module"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://www.instagram.com/*"
+      ],
+      "js": [
+        "friendship_hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://www.instagram.com/*"
@@ -70,7 +80,6 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "friendship_hook.js",
         "panel.html",
         "dashboard.css",
         "dashboard.js",
