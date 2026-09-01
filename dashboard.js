@@ -47,7 +47,14 @@ let filterType = 'all';
 let query = '';
 let shown = 0;
 let lastOwnKey = '';
-
+let listsCache = null;
+let listsFollowersRef = null;
+let listsFollowingRef = null;
+let poolCache = null;
+let poolCacheSig = '';
+let listRenderedCount = 0;
+let renderRaf = 0;
+let listObserver = null;
 
 function esc(s) {
   return String(s ?? '')
@@ -179,6 +186,13 @@ function eventHtml(e) {
     </div>`;
 }
 
+function invalidateListCaches() {
+  listsCache = null;
+  poolCache = null;
+  poolCacheSig = '';
+  listRenderedCount = 0;
+}
+
 function computeLists() {
   const fKeys = new Set(Object.keys(followers));
   const gKeys = Object.keys(following);
@@ -186,6 +200,14 @@ function computeLists() {
   const mutual = gKeys.filter((u) => fKeys.has(u));
   const fans = Object.keys(followers).filter((u) => !following[u]);
   return { nonFollowers, mutual, fans };
+}
+
+function getLists() {
+  if (listsCache && listsFollowersRef === followers && listsFollowingRef === following) return listsCache;
+  listsFollowersRef = followers;
+  listsFollowingRef = following;
+  listsCache = computeLists();
+  return listsCache;
 }
 
 function renderHeader() {
@@ -197,8 +219,13 @@ function renderHeader() {
       pill.classList.add('sync');
       if (state.syncProgress) {
         const p = state.syncProgress;
-        const label = p.phase === 'followers' ? 'seguidores' : 'seguindo';
-        t.textContent = `sincronizando… ${label}: ${Number(p.fetched || 0).toLocaleString('pt-BR')}`;
+        const label = p.phase === 'followers' ? 'seguidores' : (p.phase === 'following' ? 'seguindo' : 'listas');
+        if (p.segmentPause && p.resumeAt) {
+          const sec = Math.max(0, Math.ceil((p.resumeAt - Date.now()) / 1000));
+          t.textContent = `pausa entre blocos… ${label}: ${Number(p.fetched || 0).toLocaleString('pt-BR')} — continua em ${sec}s`;
+        } else {
+          t.textContent = `sincronizando… ${label}: ${Number(p.fetched || 0).toLocaleString('pt-BR')}`;
+        }
       } else {
         t.textContent = 'sincronizando…';
       }
@@ -223,9 +250,16 @@ function renderSyncHint() {
   if (!hint) return;
   if (state.status === 'syncing') {
     hint.style.display = 'block';
-    hint.innerHTML =
-      '<strong>Não feche a aba do Instagram</strong> enquanto sincroniza. ' +
-      'A aba pode ficar em segundo plano — não precisa estar em foco.';
+    const p = state.syncProgress;
+    if (p && p.segmentPause) {
+      hint.innerHTML =
+        '<strong>Pausa entre blocos</strong> — a sincronização continua sozinha em instantes. ' +
+        'Não feche a aba do Instagram.';
+    } else {
+      hint.innerHTML =
+        '<strong>Não feche a aba do Instagram</strong> enquanto sincroniza. ' +
+        'A aba pode ficar em segundo plano — não precisa estar em foco.';
+    }
   } else {
     hint.style.display = 'none';
   }
@@ -244,7 +278,7 @@ function renderError() {
 }
 
 function renderTabs() {
-  const { nonFollowers, mutual, fans } = computeLists();
+  const { nonFollowers, mutual, fans } = getLists();
   const tabs = [
     { key: TABS.nonFollowers, label: `Não seguem (${nonFollowers.length})` },
     { key: TABS.fans, label: `Te seguem (${fans.length})` },
@@ -256,7 +290,7 @@ function renderTabs() {
     .map((t) => `<button class="tab ${t.key === tab ? 'active' : ''}" data-tab="${t.key}">${t.label}</button>`)
     .join('');
   el.tabs().querySelectorAll('.tab').forEach((b) => {
-    b.onclick = () => { tab = b.dataset.tab; shown = 0; render(); };
+    b.onclick = () => { tab = b.dataset.tab; shown = 0; invalidateListCaches(); render(); };
   });
   const meta = el.meta();
   if (meta && state.ownUsername) meta.textContent = `@${state.ownUsername} · listas completas`;
@@ -275,7 +309,7 @@ function renderToolbar() {
       ${chips.map((c) => `<button type="button" class="chip ${filterType === c.key ? 'active' : ''}" data-filter="${c.key}">${c.label}</button>`).join('')}
     </div>`;
   bar.querySelectorAll('.chip').forEach((b) => {
-    b.onclick = () => { filterType = b.dataset.filter; shown = 0; renderList(); renderToolbar(); };
+    b.onclick = () => { filterType = b.dataset.filter; shown = 0; invalidateListCaches(); renderToolbar(); renderList(); };
   });
 }
 
@@ -315,8 +349,10 @@ async function importBackupFile(file) {
   await load();
 }
 
-function renderList() {
-  const { nonFollowers, mutual, fans } = computeLists();
+function buildPool() {
+  const sig = `${tab}|${filterType}|${query}|${Object.keys(followers).length}|${Object.keys(following).length}`;
+  if (poolCache && poolCacheSig === sig) return poolCache;
+  const { nonFollowers, mutual, fans } = getLists();
   const q = query.trim().toLowerCase();
   let pool;
   if (tab === TABS.events) {
@@ -326,40 +362,80 @@ function renderList() {
   } else {
     let keys;
     let map;
-    if (tab === TABS.nonFollowers) {
-      keys = nonFollowers;
-      map = following;
-    } else if (tab === TABS.fans) {
-      keys = fans;
-      map = followers;
-    } else {
-      keys = mutual;
-      map = following;
-    }
+    if (tab === TABS.nonFollowers) { keys = nonFollowers; map = following; }
+    else if (tab === TABS.fans) { keys = fans; map = followers; }
+    else { keys = mutual; map = following; }
     pool = keys
       .map((u) => map[u])
       .filter(Boolean)
       .filter((u) => matchesTypeFilter(u))
       .filter((u) => !q || u.username.toLowerCase().includes(q) || (u.full_name || '').toLowerCase().includes(q));
   }
-  const slice = pool.slice(0, shown + PAGE);
-  if (slice.length === 0) {
-    el.list().innerHTML = '<div class="empty">Nada aqui' + (query ? ' para essa busca' : '') + '.</div>';
-    return;
-  }
-  const htmlFn = (tab === TABS.events || tab === TABS.newFollowers) ? eventHtml : itemHtml;
-  el.list().innerHTML =
-    slice.map(htmlFn).join('') +
-    (pool.length > slice.length ? '<button class="more">Mostrar mais</button>' : '');
-  const more = el.list().querySelector('.more');
-  if (more) more.onclick = () => { shown += PAGE; renderList(); };
-  el.list().querySelectorAll('.item').forEach((it) => {
+  poolCacheSig = sig;
+  poolCache = pool;
+  return pool;
+}
+
+function wireListItems(root) {
+  root.querySelectorAll('.item').forEach((it) => {
     it.onclick = (ev) => {
       if (ev.target.closest('a, button')) return;
       openProfile(it.dataset.u);
     };
   });
-  hydrateAvatars(el.list());
+}
+
+function ensureListObserver() {
+  if (listObserver) return;
+  listObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) { shown += PAGE; renderList(); break; }
+    }
+  }, { root: null, rootMargin: '160px' });
+}
+
+function renderList() {
+  const pool = buildPool();
+  const target = shown + PAGE;
+  const slice = pool.slice(0, target);
+  const listEl = el.list();
+  if (slice.length === 0) {
+    listEl.innerHTML = '<div class="empty">Nada aqui' + (query ? ' para essa busca' : '') + '.</div>';
+    listRenderedCount = 0;
+    if (listObserver) { listObserver.disconnect(); listObserver = null; }
+    return;
+  }
+  const htmlFn = (tab === TABS.events || tab === TABS.newFollowers) ? eventHtml : itemHtml;
+  const hasMore = pool.length > slice.length;
+  if (listRenderedCount === 0 || listRenderedCount > slice.length) {
+    listEl.innerHTML = slice.map(htmlFn).join('') + (hasMore ? '<div class="sentinel" aria-hidden="true"></div>' : '');
+    listRenderedCount = slice.length;
+    wireListItems(listEl);
+    hydrateAvatars(listEl);
+  } else if (slice.length > listRenderedCount) {
+    const sentinel = listEl.querySelector('.sentinel');
+    if (sentinel) sentinel.remove();
+    const tmp = document.createElement('div');
+    tmp.innerHTML = slice.slice(listRenderedCount).map(htmlFn).join('');
+    while (tmp.firstChild) listEl.appendChild(tmp.firstChild);
+    if (hasMore) {
+      const s = document.createElement('div');
+      s.className = 'sentinel';
+      s.setAttribute('aria-hidden', 'true');
+      listEl.appendChild(s);
+    }
+    listRenderedCount = slice.length;
+    wireListItems(listEl);
+    hydrateAvatars(listEl);
+  }
+  if (hasMore) {
+    ensureListObserver();
+    const sentinel = listEl.querySelector('.sentinel');
+    if (sentinel) listObserver.observe(sentinel);
+  } else if (listObserver) {
+    listObserver.disconnect();
+    listObserver = null;
+  }
 }
 
 function renderSettings() {
@@ -367,14 +443,27 @@ function renderSettings() {
   el.notif().checked = settings.notificationsEnabled !== false;
 }
 
-function render() {
-  renderHeader();
-  renderSyncHint();
-  renderError();
+function renderHeavy() {
   renderTabs();
   renderToolbar();
   renderList();
   renderSettings();
+}
+
+function scheduleRender() {
+  if (renderRaf) return;
+  renderRaf = requestAnimationFrame(() => {
+    renderRaf = 0;
+    render();
+  });
+}
+
+function render() {
+  renderHeader();
+  renderSyncHint();
+  renderError();
+  if (state.status === 'syncing') return;
+  renderHeavy();
 }
 
 function sendSync() {
@@ -435,10 +524,10 @@ async function load() {
 
 // --- events ----------------------------------------------------------------
 el.refresh().onclick = sendSync;
-el.cardK().onclick = () => { tab = TABS.nonFollowers; shown = 0; render(); };
-el.cardF().onclick = () => { tab = TABS.fans; shown = 0; render(); };
-el.cardM().onclick = () => { tab = TABS.nonFollowers; shown = 0; render(); };
-el.search().addEventListener('input', (e) => { query = e.target.value; shown = 0; renderList(); });
+el.cardK().onclick = () => { tab = TABS.nonFollowers; shown = 0; invalidateListCaches(); render(); };
+el.cardF().onclick = () => { tab = TABS.fans; shown = 0; invalidateListCaches(); render(); };
+el.cardM().onclick = () => { tab = TABS.nonFollowers; shown = 0; invalidateListCaches(); render(); };
+el.search().addEventListener('input', (e) => { query = e.target.value; shown = 0; invalidateListCaches(); renderHeavy(); });
 el.interval().addEventListener('change', async (e) => {
   await chrome.runtime.sendMessage({
     type: 'igf-settings-update',
@@ -483,8 +572,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
     state = newState;
   }
   if (changes['igf.settings']) settings = changes['igf.settings'].newValue || {};
-  if (changes['igf.followers']) followers = changes['igf.followers'].newValue || {};
-  if (changes['igf.following']) following = changes['igf.following'].newValue || {};
+  if (changes['igf.followers']) { followers = changes['igf.followers'].newValue || {}; invalidateListCaches(); }
+  if (changes['igf.following']) { following = changes['igf.following'].newValue || {}; invalidateListCaches(); }
   if (changes['igf.followHistory']) history = changes['igf.followHistory'].newValue || {};
   if (changes['igf.unfollowEvents']) events = enrichEvents(changes['igf.unfollowEvents'].newValue || []);
   else if (changes['igf.followers'] || changes['igf.following'] || changes['igf.followHistory']) events = enrichEvents(events);

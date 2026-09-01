@@ -369,6 +369,8 @@ async function pageTransport(path, _session, signal) {
 
 const TRANSIENT_CODES = new Set(['http', 'network', 'rate-limited']);
 const RETRY_ALARM = 'igf-sync-retry';
+const CONTINUE_ALARM = 'igf-sync-continue';
+const SEGMENT_PAUSE_MS = 90_000; // pause between 12k-user chunks (~500 pages)
 // Escalating auto-retry delays (min): a fixed 5-min retry loop for hours is a
 // bot cadence; a human checks back later, then much later. retryN is
 // persisted and reset on success; cap at 2h.
@@ -377,6 +379,47 @@ const RETRY_DELAYS_MIN = [5, 15, 45, 120];
 // After a TRANSIENT failure (never login/checkpoint/gate/limit), schedule a
 // one-shot retry. Checkpoints make the auto-resume safe — it picks up from
 // the last persisted page instead of re-fetching from page 1.
+function segmentPauseMs() {
+  const base = SEGMENT_PAUSE_MS;
+  return Math.round(base * (0.9 + Math.random() * 0.35)); // ~81–124s
+}
+
+let segmentPauseMsForTests = null;
+export function __setSegmentPauseMsForTests(fn) { segmentPauseMsForTests = fn; }
+
+/**
+ * Fetch a full list, auto-continuing across MAX_PAGES segments without user action.
+ * On segment cap (IgApiError code=limit), pauses then resumes from persisted checkpoints.
+ */
+export async function fetchListComplete(kind, uid, session, listOpts, readPartialsFn, { fetchFn = fetchAllUsers } = {}) {
+  while (true) {
+    try {
+      const partials = await readPartialsFn(uid);
+      const resume = partials[kind];
+      return await fetchFn(kind, uid, session, listOpts(kind, resume));
+    } catch (err) {
+      if (!(err instanceof IgApiError) || err.code !== 'limit') throw err;
+      const partials = await readPartialsFn(uid);
+      const resume = partials[kind];
+      const fetched = resume && Array.isArray(resume.users) ? resume.users.length : 0;
+      const pauseMs = segmentPauseMsForTests ? segmentPauseMsForTests() : segmentPauseMs();
+      await setState({
+        syncProgress: {
+          phase: kind,
+          fetched,
+          segmentPause: true,
+          resumeAt: Date.now() + pauseMs,
+        },
+      });
+      await chrome.alarms.clear(CONTINUE_ALARM);
+      await chrome.alarms.create(CONTINUE_ALARM, { delayInMinutes: Math.max(0.05, pauseMs / 60000) });
+      await sleep(pauseMs);
+      await chrome.alarms.clear(CONTINUE_ALARM);
+      await setState({ syncProgress: { phase: kind, fetched } });
+    }
+  }
+}
+
 function scheduleErrorRetry(code) {
   if (!TRANSIENT_CODES.has(code)) return;
   getState().then(async (st) => {
@@ -401,6 +444,7 @@ async function sync(trigger) {
       }
       // Cancel any pending auto-retry — a fresh manual/alarm attempt supersedes it.
       await chrome.alarms.clear(RETRY_ALARM);
+      await chrome.alarms.clear(CONTINUE_ALARM);
       await setState({ status: 'syncing', trigger: trig, error: null, syncProgress: null });
       await pinSyncTab(true, { hint: true });
       return await withPageTransport(async () => {
@@ -430,7 +474,6 @@ async function sync(trigger) {
       // Lists run SEQUENTIALLY — parallel walks roughly double request pressure
       // on Instagram and are easier to flag as automation. Progress is persisted
       // per page; each page is checkpointed so a failure/restart resumes.
-      const partials = await readPartials(uid);
       const listAbort = new AbortController();
       const listOpts = (kind, resume) => ({
         signal: listAbort.signal,
@@ -441,8 +484,8 @@ async function sync(trigger) {
       let following;
       let followers;
       try {
-        following = await fetchAllUsers('following', uid, session, listOpts('following', partials.following));
-        followers = await fetchAllUsers('followers', uid, session, listOpts('followers', partials.followers));
+        following = await fetchListComplete('following', uid, session, listOpts, readPartials);
+        followers = await fetchListComplete('followers', uid, session, listOpts, readPartials);
       } catch (err) {
         listAbort.abort();
         throw err;
@@ -506,6 +549,7 @@ async function sync(trigger) {
       if (snapshot.snapshotUid) persist[K.snapshotUid] = snapshot.snapshotUid;
       await chrome.storage.local.set(persist);
       await clearPartials(); // sync complete — no resume needed anymore
+      await chrome.alarms.clear(CONTINUE_ALARM);
 
       // --- notifications for people we still follow who stopped following us ---
       const notifyable = snapshot.notifyable;
@@ -603,6 +647,15 @@ export async function notifyUnfollows(events) {
 // Alarms + lifecycle
 // ---------------------------------------------------------------------------
 
+async function resumeInterruptedSync() {
+  try {
+    const st = await getState();
+    const meta = (await chrome.storage.local.get(PART_META))[PART_META];
+    if (!meta || !meta.keys || !meta.keys.length) return;
+    if (st.status === 'syncing') sync('resume');
+  } catch { /* best-effort */ }
+}
+
 async function scheduleAlarm() {
   const s = await getSettings();
   await chrome.alarms.clear(SYNC_ALARM);
@@ -612,7 +665,7 @@ async function scheduleAlarm() {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== SYNC_ALARM && alarm.name !== RETRY_ALARM) return;
+  if (alarm.name !== SYNC_ALARM && alarm.name !== RETRY_ALARM && alarm.name !== CONTINUE_ALARM) return;
   // Background syncs run only while an IG tab exists — the requests must
   // LOOK like page requests (see pageTransport). No IG tab open = nobody is
   // on Instagram = skip; the next panel open / alarm with a tab handles it.
@@ -622,7 +675,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   } catch {
     return;
   }
-  sync(alarm.name === SYNC_ALARM ? 'alarm' : 'retry');
+  const trig = alarm.name === SYNC_ALARM ? 'alarm' : (alarm.name === CONTINUE_ALARM ? 'continue' : 'retry');
+  sync(trig);
 });
 
 chrome.runtime.onInstalled.addListener(async (details) => {

@@ -41,9 +41,11 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 | ~100 contas (~9 páginas) | ~20–40 segundos |
 | ~500 contas (~42 páginas) | ~2–3 minutos |
 | ~1000 contas (~84 páginas) | ~4–6 minutos |
-| ~20 mil seguidores (~834 páginas) | ~30–50 minutos (pode precisar de mais de uma sincronização) |
+| ~20 mil seguidores (~834 páginas) | ~30–50 minutos (continua sozinha) |
 
-**Contas muito grandes (ex.: 20 mil seguidores):** funciona, mas demora. Cada sincronização busca no máximo **12 mil contas por lista** antes de pausar; se passar disso, o painel mostra **incompleto** — clique em **Sincronizar** de novo para continuar de onde parou. Mantenha a aba do Instagram aberta o tempo todo. Contas enormes têm mais chance de o Instagram pedir para “aguardar” (rate limit); a extensão tenta de novo sozinha depois.
+**Contas muito grandes (ex.: 20 mil seguidores):** funciona, mas demora. A sincronização **começa e termina sozinha** — a cada **12 mil contas** por lista ela faz uma pausa curta (~90 s) e continua de onde parou, sem precisar clicar em nada. Mantenha a aba do Instagram aberta o tempo todo.
+
+**Pacing não elimina rate limit:** o app já rola devagar (24 contas por vez, pausas entre páginas), mas o Instagram ainda pode pedir para “aguardar” em contas enormes. Isso é limite da plataforma, não bug — a extensão tenta de novo sozinha depois.
 
 ---
 
