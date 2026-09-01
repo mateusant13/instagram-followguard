@@ -489,6 +489,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
   render();
 });
 
+const exportBackupBtn = $('export-backup');
+if (exportBackupBtn) exportBackupBtn.addEventListener('click', () => exportBackupFile());
+
+const importBackupInput = $('import-backup');
+if (importBackupInput) {
+  importBackupInput.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    await importBackupFile(file);
+  });
+}
+
 const deleteBtn = $('delete-data');
 if (deleteBtn) {
   deleteBtn.addEventListener('click', async () => {
