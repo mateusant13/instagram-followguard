@@ -32,6 +32,7 @@ const el = {
   interval: () => $('interval'),
   notif: () => $('notif'),
   openIg: () => $('open-ig'),
+  toolbar: () => $('toolbar'),
 };
 
 let state = { status: 'idle' };
@@ -39,7 +40,11 @@ let settings = {};
 let followers = {};
 let following = {};
 let events = [];
+let newFollowers = [];
+let history = {};
 let tab = TABS.nonFollowers;
+let filterType = 'all';
+let hideWhitelist = true;
 let query = '';
 let shown = 0;
 let live = [];
@@ -379,17 +384,31 @@ async function copyList() {
 }
 
 function renderList() {
-  const { nonFollowers, mutual } = computeLists();
+  const { nonFollowers, nonFollowersAll, mutual, fans } = computeLists();
   const q = query.trim().toLowerCase();
   let pool;
+  const showStar = tab === TABS.nonFollowers || tab === TABS.fans || tab === TABS.mutual;
   if (tab === TABS.events) {
     pool = events.filter((e) => !q || e.username.toLowerCase().includes(q) || (e.fullName || '').toLowerCase().includes(q));
+  } else if (tab === TABS.newFollowers) {
+    pool = newFollowers.filter((e) => !q || e.username.toLowerCase().includes(q) || (e.fullName || '').toLowerCase().includes(q));
   } else {
-    const keys = tab === TABS.nonFollowers ? nonFollowers : mutual;
-    const map = tab === TABS.nonFollowers ? following : following;
+    let keys;
+    let map;
+    if (tab === TABS.nonFollowers) {
+      keys = hideWhitelist ? nonFollowers : nonFollowersAll;
+      map = following;
+    } else if (tab === TABS.fans) {
+      keys = fans;
+      map = followers;
+    } else {
+      keys = mutual;
+      map = following;
+    }
     pool = keys
       .map((u) => map[u])
       .filter(Boolean)
+      .filter((u) => matchesTypeFilter(u))
       .filter((u) => !q || u.username.toLowerCase().includes(q) || (u.full_name || '').toLowerCase().includes(q));
   }
   live = pool;
@@ -398,15 +417,22 @@ function renderList() {
     el.list().innerHTML = '<div class="empty">Nada aqui' + (query ? ' para essa busca' : '') + '.</div>';
     return;
   }
+  const htmlFn = (tab === TABS.events || tab === TABS.newFollowers) ? eventHtml : (u) => itemHtml(u, { showStar });
   el.list().innerHTML =
-    slice.map(tab === TABS.events ? eventHtml : itemHtml).join('') +
+    slice.map(htmlFn).join('') +
     (pool.length > slice.length ? '<button class="more">Mostrar mais</button>' : '');
   const more = el.list().querySelector('.more');
   if (more) more.onclick = () => { shown += PAGE; renderList(); };
   el.list().querySelectorAll('.item').forEach((it) => {
     it.onclick = (ev) => {
-      if (ev.target.closest('a')) return;
+      if (ev.target.closest('a, button')) return;
       openProfile(it.dataset.u);
+    };
+  });
+  el.list().querySelectorAll('button.star').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      toggleWhitelist(btn.dataset.star);
     };
   });
   hydrateAvatars(el.list());
@@ -426,6 +452,7 @@ function render() {
   renderSyncHint();
   renderError();
   renderTabs();
+  renderToolbar();
   renderList();
   renderMeta();
   renderSettings();
@@ -435,15 +462,20 @@ function sendSync() {
   chrome.runtime.sendMessage({ type: 'igf-sync', trigger: 'manual' });
 }
 
-// Events stored before profilePicUrl existed: backfill the pic from the
-// current follow lists (the user is in at least one of them while relevant).
+function eventPicUrl(e) {
+  const u = e.username;
+  return (
+    (following[u] && following[u].profile_pic_url) ||
+    (followers[u] && followers[u].profile_pic_url) ||
+    (history[u] && history[u].profilePicUrl) ||
+    e.profilePicUrl ||
+    ''
+  );
+}
+
 function enrichEvents(list) {
   return list.map((e) => {
-    if (e.profilePicUrl) return e;
-    const pic =
-      (following[e.username] && following[e.username].profile_pic_url) ||
-      (followers[e.username] && followers[e.username].profile_pic_url) ||
-      '';
+    const pic = eventPicUrl(e);
     return pic ? { ...e, profilePicUrl: pic } : e;
   });
 }
@@ -458,13 +490,15 @@ function openProfile(username) {
 
 async function load() {
   const o = await chrome.storage.local.get([
-    'igf.state', 'igf.settings', 'igf.followers', 'igf.following', 'igf.unfollowEvents', 'igf.newFollowerEvents',
+    'igf.state', 'igf.settings', 'igf.followers', 'igf.following', 'igf.followHistory', 'igf.unfollowEvents', 'igf.newFollowerEvents',
   ]);
   state = o['igf.state'] || { status: 'idle' };
   settings = o['igf.settings'] || {};
   followers = o['igf.followers'] || {};
   following = o['igf.following'] || {};
+  history = o['igf.followHistory'] || {};
   events = enrichEvents(o['igf.unfollowEvents'] || []);
+  newFollowers = enrichEvents(o['igf.newFollowerEvents'] || []);
   render();
   // Panel: auto-sync when data is stale (popup relies on the manual button).
   if (document.body.classList.contains('panel') && settings.consentAt) {
@@ -532,7 +566,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes['igf.settings']) settings = changes['igf.settings'].newValue || {};
   if (changes['igf.followers']) followers = changes['igf.followers'].newValue || {};
   if (changes['igf.following']) following = changes['igf.following'].newValue || {};
+  if (changes['igf.followHistory']) history = changes['igf.followHistory'].newValue || {};
   if (changes['igf.unfollowEvents']) events = enrichEvents(changes['igf.unfollowEvents'].newValue || []);
+  else if (changes['igf.followers'] || changes['igf.following'] || changes['igf.followHistory']) events = enrichEvents(events);
+  if (changes['igf.newFollowerEvents']) newFollowers = enrichEvents(changes['igf.newFollowerEvents'].newValue || []);
+  else if (changes['igf.followers'] || changes['igf.following'] || changes['igf.followHistory']) newFollowers = enrichEvents(newFollowers);
   render();
 });
 

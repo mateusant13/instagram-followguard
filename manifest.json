@@ -1,7 +1,7 @@
 {
   "name": "IG FollowGuard",
   "description": "Gerenciador de seguidores do Instagram: quem não segue de volta, novos seguidores, exportar CSV, lista de exceções e notificações.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "manifest_version": 3,
   "minimum_chrome_version": "102",
   "permissions": [
