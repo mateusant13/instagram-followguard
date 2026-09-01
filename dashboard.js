@@ -299,5 +299,324 @@ function renderTabs() {
 
 function renderToolbar() {
   const bar = el.toolbar();
+  if (!bar) return;
+  const chips = [
+    { key: 'all', label: 'Todos' },
+    { key: 'verified', label: 'Verificados' },
+    { key: 'private', label: 'Privados' },
+  ];
+  bar.innerHTML = `
+    <div class="chip-row">
+      ${chips.map((c) => `<button type="button" class="chip ${filterType === c.key ? 'active' : ''}" data-filter="${c.key}">${c.label}</button>`).join('')}
+    </div>`;
+  bar.querySelectorAll('.chip').forEach((b) => {
+    b.onclick = () => { filterType = b.dataset.filter; shown = 0; invalidateListCaches(); renderToolbar(); renderList(); };
+  });
+}
 
-[Showing lines 1-300 of 610. Use :301 to continue]
+async function exportBackupFile() {
+  const res = await chrome.runtime.sendMessage({ type: 'igf-export-backup' });
+  if (!res || !res.ok || !res.backup) {
+    alert((res && res.error) || 'Não foi possível exportar o backup.');
+    return;
+  }
+  const name = `igfollowguard-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const blob = new Blob([JSON.stringify(res.backup, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  try {
+    await chrome.downloads.download({ url, filename: name, saveAs: false });
+  } catch {
+    alert('Não foi possível baixar o backup.');
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+}
+
+async function importBackupFile(file) {
+  if (!file) return;
+  let backup;
+  try {
+    backup = JSON.parse(await file.text());
+  } catch {
+    alert('Arquivo inválido — escolha um .json exportado pelo IG FollowGuard.');
+    return;
+  }
+  if (!confirm('Substituir os dados atuais desta instalação pelo backup?')) return;
+  const res = await chrome.runtime.sendMessage({ type: 'igf-import-backup', backup });
+  if (!res || !res.ok) {
+    alert((res && res.error) || 'Falha ao importar backup.');
+    return;
+  }
+  await load();
+}
+
+function buildPool() {
+  const sig = `${tab}|${filterType}|${query}|${Object.keys(followers).length}|${Object.keys(following).length}`;
+  if (poolCache && poolCacheSig === sig) return poolCache;
+  const { nonFollowers, mutual, fans } = getLists();
+  const q = query.trim().toLowerCase();
+  let pool;
+  if (tab === TABS.events) {
+    pool = events.filter((e) => !q || e.username.toLowerCase().includes(q) || (e.fullName || '').toLowerCase().includes(q));
+  } else if (tab === TABS.newFollowers) {
+    pool = newFollowers.filter((e) => !q || e.username.toLowerCase().includes(q) || (e.fullName || '').toLowerCase().includes(q));
+  } else {
+    let keys;
+    let map;
+    if (tab === TABS.nonFollowers) { keys = nonFollowers; map = following; }
+    else if (tab === TABS.fans) { keys = fans; map = followers; }
+    else { keys = mutual; map = following; }
+    pool = keys
+      .map((u) => map[u])
+      .filter(Boolean)
+      .filter((u) => matchesTypeFilter(u))
+      .filter((u) => !q || u.username.toLowerCase().includes(q) || (u.full_name || '').toLowerCase().includes(q));
+  }
+  poolCacheSig = sig;
+  poolCache = pool;
+  return pool;
+}
+
+function wireListItems(root) {
+  root.querySelectorAll('.item').forEach((it) => {
+    it.onclick = (ev) => {
+      if (ev.target.closest('a, button')) return;
+      openProfile(it.dataset.u);
+    };
+  });
+}
+
+function ensureListObserver() {
+  if (listObserver) return;
+  listObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) { shown += PAGE; renderList(); break; }
+    }
+  }, { root: null, rootMargin: '160px' });
+}
+
+function renderList() {
+  const pool = buildPool();
+  const target = shown + PAGE;
+  const slice = pool.slice(0, target);
+  const listEl = el.list();
+  if (slice.length === 0) {
+    listEl.innerHTML = '<div class="empty">Nada aqui' + (query ? ' para essa busca' : '') + '.</div>';
+    listRenderedCount = 0;
+    if (listObserver) { listObserver.disconnect(); listObserver = null; }
+    return;
+  }
+  const htmlFn = (tab === TABS.events || tab === TABS.newFollowers) ? eventHtml : itemHtml;
+  const hasMore = pool.length > slice.length;
+  if (listRenderedCount === 0 || listRenderedCount > slice.length) {
+    listEl.innerHTML = slice.map(htmlFn).join('') + (hasMore ? '<div class="sentinel" aria-hidden="true"></div>' : '');
+    listRenderedCount = slice.length;
+    wireListItems(listEl);
+    hydrateAvatars(listEl);
+  } else if (slice.length > listRenderedCount) {
+    const sentinel = listEl.querySelector('.sentinel');
+    if (sentinel) sentinel.remove();
+    const tmp = document.createElement('div');
+    tmp.innerHTML = slice.slice(listRenderedCount).map(htmlFn).join('');
+    while (tmp.firstChild) listEl.appendChild(tmp.firstChild);
+    if (hasMore) {
+      const s = document.createElement('div');
+      s.className = 'sentinel';
+      s.setAttribute('aria-hidden', 'true');
+      listEl.appendChild(s);
+    }
+    listRenderedCount = slice.length;
+    wireListItems(listEl);
+    hydrateAvatars(listEl);
+  }
+  if (hasMore) {
+    ensureListObserver();
+    const sentinel = listEl.querySelector('.sentinel');
+    if (sentinel) listObserver.observe(sentinel);
+  } else if (listObserver) {
+    listObserver.disconnect();
+    listObserver = null;
+  }
+}
+
+function renderSettings() {
+  el.interval().value = String(settings.refreshMinutes || 60);
+  el.notif().checked = settings.notificationsEnabled !== false;
+}
+
+function renderHeavy() {
+  renderTabs();
+  renderToolbar();
+  renderList();
+  renderSettings();
+}
+
+function scheduleRender() {
+  if (renderRaf) return;
+  renderRaf = requestAnimationFrame(() => {
+    renderRaf = 0;
+    render();
+  });
+}
+
+function render() {
+  renderHeader();
+  renderSyncHint();
+  renderError();
+  if (pauseTick) {
+    clearInterval(pauseTick);
+    pauseTick = null;
+  }
+  if (state.status === 'syncing') {
+    if (state.syncProgress && state.syncProgress.segmentPause) {
+      pauseTick = setInterval(() => {
+        renderHeader();
+        renderSyncHint();
+      }, 1000);
+    }
+    return;
+  }
+  renderHeavy();
+}
+
+function sendSync() {
+  chrome.runtime.sendMessage({ type: 'igf-sync', trigger: 'manual' });
+}
+
+function eventPicUrl(e) {
+  const u = e.username;
+  return (
+    (following[u] && following[u].profile_pic_url) ||
+    (followers[u] && followers[u].profile_pic_url) ||
+    (history[u] && history[u].profilePicUrl) ||
+    e.profilePicUrl ||
+    ''
+  );
+}
+
+function enrichEvents(list) {
+  return list.map((e) => {
+    const pic = eventPicUrl(e);
+    return pic ? { ...e, profilePicUrl: pic } : e;
+  });
+}
+
+function openInstagram() {
+  chrome.tabs.create({ url: 'https://www.instagram.com/' });
+}
+
+function openProfile(username) {
+  chrome.tabs.create({ url: `https://www.instagram.com/${encodeURIComponent(username)}/` });
+}
+
+async function load() {
+  const o = await chrome.storage.local.get([
+    'igf.state', 'igf.settings', 'igf.followers', 'igf.following', 'igf.followHistory', 'igf.unfollowEvents', 'igf.newFollowerEvents',
+  ]);
+  state = o['igf.state'] || { status: 'idle' };
+  settings = o['igf.settings'] || {};
+  followers = o['igf.followers'] || {};
+  following = o['igf.following'] || {};
+  history = o['igf.followHistory'] || {};
+  events = enrichEvents(o['igf.unfollowEvents'] || []);
+  newFollowers = enrichEvents(o['igf.newFollowerEvents'] || []);
+  render();
+  // Panel: auto-sync when data is stale (popup relies on the manual button).
+  if (document.body.classList.contains('panel') && settings.consentAt) {
+    const staleMs = (settings.refreshMinutes || 60) * 60 * 1000;
+    if (!state.lastSyncAt || Date.now() - new Date(state.lastSyncAt).getTime() > staleMs) {
+      sendSync();
+    }
+  }
+  // Announce the dashboard is live (the injected panel listens; harmless
+  // when this page runs as the toolbar popup — posting to self, no receiver).
+  try {
+    parent.postMessage({ type: 'igf-panel-ready' }, '*');
+  } catch { /* never break the UI */ }
+}
+
+// --- events ----------------------------------------------------------------
+el.refresh().onclick = sendSync;
+el.cardK().onclick = () => { tab = TABS.nonFollowers; shown = 0; invalidateListCaches(); render(); };
+el.cardF().onclick = () => { tab = TABS.fans; shown = 0; invalidateListCaches(); render(); };
+el.cardM().onclick = () => { tab = TABS.nonFollowers; shown = 0; invalidateListCaches(); render(); };
+el.search().addEventListener('input', (e) => { query = e.target.value; shown = 0; invalidateListCaches(); renderHeavy(); });
+el.interval().addEventListener('change', async (e) => {
+  await chrome.runtime.sendMessage({
+    type: 'igf-settings-update',
+    settings: { refreshMinutes: Number(e.target.value) },
+  });
+});
+el.notif().addEventListener('change', async (e) => {
+  await chrome.runtime.sendMessage({
+    type: 'igf-settings-update',
+    settings: { notificationsEnabled: e.target.checked },
+  });
+});
+el.openIg().onclick = openInstagram;
+
+// CSP-safe avatar fallback: a failed <img> becomes the letter placeholder.
+// (Inline onerror= handlers are blocked by the extension CSP.)
+document.addEventListener('error', (ev) => {
+  const t = ev.target;
+  if (!t || t.tagName !== 'IMG' || !t.classList || !t.classList.contains('avatar')) return;
+  const item = t.closest && t.closest('.item');
+  t.outerHTML = placeholder(item && item.dataset ? { username: item.dataset.u } : {});
+}, true);
+
+// Panel-only: the inline close script was removed from panel.html (extension
+// CSP blocks inline scripts -> console errors); wired here, guarded for the
+// popup which has no #close button.
+const closeBtn = $('close');
+if (closeBtn) closeBtn.addEventListener('click', () => parent.postMessage({ type: 'igf-close-panel' }, '*'));
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes['igf.state']) {
+    const newState = changes['igf.state'].newValue || { status: 'idle' };
+    const ownKey = `${newState.ownUserId || ''}:${newState.ownUsername || ''}`;
+    if (lastOwnKey && ownKey !== lastOwnKey) {
+      shown = 0;
+      query = '';
+      const search = el.search();
+      if (search) search.value = '';
+    }
+    lastOwnKey = ownKey;
+    state = newState;
+  }
+  if (changes['igf.settings']) settings = changes['igf.settings'].newValue || {};
+  if (changes['igf.followers']) { followers = changes['igf.followers'].newValue || {}; invalidateListCaches(); }
+  if (changes['igf.following']) { following = changes['igf.following'].newValue || {}; invalidateListCaches(); }
+  if (changes['igf.followHistory']) history = changes['igf.followHistory'].newValue || {};
+  if (changes['igf.unfollowEvents']) events = enrichEvents(changes['igf.unfollowEvents'].newValue || []);
+  else if (changes['igf.followers'] || changes['igf.following'] || changes['igf.followHistory']) events = enrichEvents(events);
+  if (changes['igf.newFollowerEvents']) newFollowers = enrichEvents(changes['igf.newFollowerEvents'].newValue || []);
+  else if (changes['igf.followers'] || changes['igf.following'] || changes['igf.followHistory']) newFollowers = enrichEvents(newFollowers);
+  render();
+});
+
+const exportBackupBtn = $('export-backup');
+if (exportBackupBtn) exportBackupBtn.addEventListener('click', () => exportBackupFile());
+
+const importBackupInput = $('import-backup');
+if (importBackupInput) {
+  importBackupInput.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    await importBackupFile(file);
+  });
+}
+
+const deleteBtn = $('delete-data');
+if (deleteBtn) {
+  deleteBtn.addEventListener('click', async () => {
+    if (!confirm('Apagar todos os dados do IG FollowGuard neste navegador?')) return;
+    await chrome.runtime.sendMessage({ type: 'igf-delete-all' });
+    await load();
+  });
+}
+
+
+export { esc, itemHtml };
+
+if (!globalThis.__IGF_SKIP_UI_BOOT__) load();
