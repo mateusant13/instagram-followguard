@@ -2,7 +2,6 @@
 
 Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém deixa de te seguir.
 
-> **No GitHub:** role a página **para baixo** até a seção **Instalar (primeira vez)** — o tutorial completo está lá.
 
 ---
 
