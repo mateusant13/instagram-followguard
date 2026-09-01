@@ -278,6 +278,14 @@ function renderHeader() {
 function renderSyncHint() {
   const hint = el.syncHint();
   if (!hint) return;
+  if (cooldownNoticeMs > 0) {
+    hint.style.display = 'block';
+    hint.innerHTML =
+      '<strong>Sincronização recente</strong> — a próxima manual fica disponível em ' +
+      formatCooldownWait(cooldownNoticeMs) +
+      '. O intervalo automático (abaixo) não muda.';
+    return;
+  }
   if (state.status === 'syncing') {
     hint.style.display = 'block';
     const p = state.syncProgress;
@@ -510,8 +518,38 @@ function render() {
   renderHeavy();
 }
 
-function sendSync() {
-  chrome.runtime.sendMessage({ type: 'igf-sync', trigger: 'manual' });
+function showCooldownNotice(ms) {
+  cooldownNoticeMs = ms;
+  renderSyncHint();
+  if (cooldownTick) clearInterval(cooldownTick);
+  if (ms <= 0) return;
+  cooldownTick = setInterval(() => {
+    const left = manualCooldownRemaining();
+    if (left <= 0) {
+      cooldownNoticeMs = 0;
+      clearInterval(cooldownTick);
+      cooldownTick = null;
+      render();
+      return;
+    }
+    cooldownNoticeMs = left;
+    renderSyncHint();
+    renderHeader();
+  }, 1000);
+}
+
+async function sendSync() {
+  const cdMs = manualCooldownRemaining();
+  if (cdMs > 0) {
+    showCooldownNotice(cdMs);
+    return;
+  }
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'igf-sync', trigger: 'manual' });
+    if (res && res.skipped === 'cooldown') {
+      showCooldownNotice((res.waitMinutes || 1) * 60000);
+    }
+  } catch { /* popup may close */ }
 }
 
 function eventPicUrl(e) {
