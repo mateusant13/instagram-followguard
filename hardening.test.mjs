@@ -45,7 +45,7 @@ globalThis.document = {
 };
 globalThis.parent = { postMessage() {} };
 
-const { deleteAllData } = await import('./background.js');
+const { deleteAllData, manualSyncCooldownInfo, MANUAL_COOLDOWN_MIN } = await import('./background.js');
 
 test('delete-all wipes every igf.* key incl. resume.* and resets defaults', async () => {
   Object.assign(store, {
@@ -72,6 +72,17 @@ test('delete-all wipes every igf.* key incl. resume.* and resets defaults', asyn
 
 globalThis.__IGF_SKIP_UI_BOOT__ = true;
 const { itemHtml } = await import('./dashboard.js');
+
+test('manual sync cooldown blocks for 15 minutes after last sync', () => {
+  const last = new Date('2026-01-01T12:00:00.000Z').toISOString();
+  const now = new Date('2026-01-01T12:05:00.000Z').getTime();
+  const cd = manualSyncCooldownInfo(last, now);
+  assert.equal(cd.blocked, true);
+  assert.equal(cd.waitMinutes, 10);
+  assert.equal(MANUAL_COOLDOWN_MIN, 15);
+  const ok = manualSyncCooldownInfo(last, now + MANUAL_COOLDOWN_MIN * 60 * 1000);
+  assert.equal(ok.blocked, false);
+});
 
 test('itemHtml escapes full_name XSS payload in text and title', () => {
   const html = itemHtml({

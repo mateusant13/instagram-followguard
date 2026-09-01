@@ -10,6 +10,7 @@ const TABS = {
 };
 const PAGE = 60;
 const R = 60 * 1000;
+const MANUAL_COOLDOWN_MS = 15 * 60 * 1000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -56,6 +57,8 @@ let listRenderedCount = 0;
 let renderRaf = 0;
 let listObserver = null;
 let pauseTick = null;
+let cooldownNoticeMs = 0;
+let cooldownTick = null;
 
 function esc(s) {
   return String(s ?? '')
@@ -211,6 +214,17 @@ function getLists() {
   return listsCache;
 }
 
+
+function manualCooldownRemaining() {
+  if (state.status !== 'ok' || !state.lastSyncAt) return 0;
+  const elapsed = Date.now() - new Date(state.lastSyncAt).getTime();
+  return Math.max(0, MANUAL_COOLDOWN_MS - elapsed);
+}
+
+function formatCooldownWait(ms) {
+  const min = Math.max(1, Math.ceil(ms / 60000));
+  return min === 1 ? '1 minuto' : `${min} minutos`;
+}
 function liveCounts() {
   const fKeys = Object.keys(followers);
   const gKeys = Object.keys(following);
@@ -250,7 +264,11 @@ function renderHeader() {
     default: t.textContent = state.status;
   }
   el.lastSync().textContent = `última: ${relTime(state.lastSyncAt)}`;
-  el.refresh().disabled = state.status === 'syncing';
+  const cdMs = manualCooldownRemaining();
+  el.refresh().disabled = state.status === 'syncing' || cdMs > 0;
+  el.refresh().title = cdMs > 0
+    ? `Próxima sincronização manual em ${formatCooldownWait(cdMs)}`
+    : 'Sincronizar agora';
   const live = state.status === 'syncing' ? liveCounts() : null;
   el.cardK().querySelector('.count').textContent = live ? live.notBack : state.notFollowingBackCount;
   el.cardF().querySelector('.count').textContent = live ? live.followers : state.followersCount;
@@ -467,6 +485,7 @@ function scheduleRender() {
   renderRaf = requestAnimationFrame(() => {
     renderRaf = 0;
     render();
+  if (manualCooldownRemaining() > 0) showCooldownNotice(manualCooldownRemaining());
   });
 }
 

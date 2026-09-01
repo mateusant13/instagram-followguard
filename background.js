@@ -19,6 +19,7 @@ const K = {
   snapshotUid: 'igf.snapshotUid',
 };
 const EVENTS_MAX = 100;
+export const MANUAL_COOLDOWN_MIN = 15; // min between manual full syncs
 const SYNC_ALARM = 'igf-sync';
 const DEFAULT_SETTINGS = {
   // No username here: the logged-in profile is resolved at runtime from the
@@ -78,6 +79,22 @@ export function processSyncSnapshot({
   };
 }
 
+
+/** Pure helper — blocks manual re-sync shortly after a successful full sync. */
+export function manualSyncCooldownInfo(lastSyncAt, now = Date.now()) {
+  if (!lastSyncAt) return { blocked: false, waitMs: 0, waitMinutes: 0, nextSyncAt: null };
+  const elapsed = now - new Date(lastSyncAt).getTime();
+  const waitMs = MANUAL_COOLDOWN_MIN * 60 * 1000;
+  if (elapsed >= waitMs) return { blocked: false, waitMs: 0, waitMinutes: 0, nextSyncAt: null };
+  const remainMs = waitMs - elapsed;
+  const waitMinutes = Math.max(1, Math.ceil(remainMs / 60000));
+  return {
+    blocked: true,
+    waitMs: remainMs,
+    waitMinutes,
+    nextSyncAt: new Date(now + remainMs).toISOString(),
+  };
+}
 function curUid(uid) {
   return uid != null && uid !== '' ? String(uid) : null;
 }
@@ -507,6 +524,20 @@ async function sync(trigger) {
     try {
       const settings0 = await getSettings();
       const autoConsent = ['install', 'startup', 'alarm', 'resume', 'continue', 'retry'].includes(trig);
+      if (trig === 'manual') {
+        const stCd = await getState();
+        if (stCd.status === 'ok') {
+          const cd = manualSyncCooldownInfo(stCd.lastSyncAt);
+          if (cd.blocked) {
+            return {
+              ok: false,
+              skipped: 'cooldown',
+              waitMinutes: cd.waitMinutes,
+              nextSyncAt: cd.nextSyncAt,
+            };
+          }
+        }
+      }
       if (!settings0.consentAt && !autoConsent && trig !== 'manual') {
         return { ok: false, skipped: 'no-consent' };
       }
