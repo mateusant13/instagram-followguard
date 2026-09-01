@@ -42,8 +42,6 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 | ~500 contas (~42 páginas) | ~2–3 minutos |
 | ~1000 contas (~84 páginas) | ~4–6 minutos |
 
-Se você tem poucos seguidores (ex.: 93), a primeira sync pode parecer **rápida** — isso é normal, não é bug.
-
 ---
 
 ## Atualizar para versão nova
