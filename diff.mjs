@@ -59,3 +59,24 @@ export function diffAndRecord(prev, next, following, history, now) {
 export function mergeEvents(newEvents, storedEvents, max) {
   return [...newEvents.reverse(), ...storedEvents].slice(0, max);
 }
+
+/**
+ * Detect accounts that appeared in the followers list since the last snapshot.
+ */
+export function detectNewFollowers(prev, next, now) {
+  const events = [];
+  const nextMap = next instanceof Map ? next : new Map(Object.entries(next || {}));
+  const prevObj = prev || {};
+  for (const [u, meta] of nextMap) {
+    if (!prevObj[u]) {
+      events.push({
+        username: u,
+        pk: String(meta.pk || ''),
+        fullName: meta.full_name || meta.fullName || '',
+        profilePicUrl: meta.profile_pic_url || meta.profilePicUrl || '',
+        detectedAt: now,
+      });
+    }
+  }
+  return events;
+}

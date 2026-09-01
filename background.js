@@ -5,7 +5,7 @@
 'use strict';
 
 import { readSession, fetchAllUsers, IgApiError, buildResume, apiFetch, transientRetry, __setTransport } from './ig_api.mjs';
-import { diffAndRecord, mergeEvents } from './diff.mjs';
+import { diffAndRecord, mergeEvents, detectNewFollowers } from './diff.mjs';
 
 const K = {
   settings: 'igf.settings',
@@ -15,6 +15,7 @@ const K = {
   prevFollowers: 'igf.prevFollowers',
   history: 'igf.followHistory',
   events: 'igf.unfollowEvents',
+  newFollowers: 'igf.newFollowerEvents',
   snapshotUid: 'igf.snapshotUid',
 };
 const EVENTS_MAX = 100;
@@ -26,6 +27,7 @@ const DEFAULT_SETTINGS = {
   notificationsEnabled: true,
   autoSync: true,
   consentAt: null,
+  whitelist: [],
 };
 
 /** Account-isolation policy for prevFollowers snapshots (exported for tests). */
@@ -446,10 +448,20 @@ async function sync(trigger) {
         ? storedEvents
         : mergeEvents(snapshot.events, storedEvents, EVENTS_MAX);
 
+      const prevFollowersObj = stored[K.prevFollowers] || {};
+      const newFollowerBatch = snapshot.freshBaseline
+        ? []
+        : detectNewFollowers(prevFollowersObj, followers, now);
+      const storedNewFollowers = (await chrome.storage.local.get(K.newFollowers))[K.newFollowers] || [];
+      const allNewFollowers = snapshot.freshBaseline
+        ? storedNewFollowers
+        : mergeEvents(newFollowerBatch, storedNewFollowers, EVENTS_MAX);
+
       const persist = {
         [K.prevFollowers]: Object.fromEntries(followers),
         [K.history]: snapshot.newHistory,
         [K.events]: allEvents,
+        [K.newFollowers]: allNewFollowers,
       };
       if (snapshot.snapshotUid) persist[K.snapshotUid] = snapshot.snapshotUid;
       await chrome.storage.local.set(persist);
@@ -466,7 +478,10 @@ async function sync(trigger) {
         }
       }
 
-      const notFollowingBack = [...following.keys()].filter((u) => !followers.has(u));
+      const wl = new Set((settings.whitelist || []).map((u) => String(u).toLowerCase()));
+      const notFollowingBack = [...following.keys()].filter(
+        (u) => !followers.has(u) && !wl.has(u.toLowerCase()),
+      );
       await setState({
         status: 'ok',
         lastSyncAt: nowIso(),

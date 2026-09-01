@@ -1,7 +1,13 @@
 // IG FollowGuard — dashboard (popup + injected panel share this).
 'use strict';
 
-const TABS = { nonFollowers: 'nonFollowers', events: 'events', mutual: 'mutual' };
+const TABS = {
+  nonFollowers: 'nonFollowers',
+  fans: 'fans',
+  mutual: 'mutual',
+  events: 'events',
+  newFollowers: 'newFollowers',
+};
 const PAGE = 60;
 const R = 60 * 1000;
 
@@ -131,12 +137,33 @@ function hydrateAvatars(root) {
   }
 }
 
-function itemHtml(u) {
+function whitelistSet() {
+  return new Set((settings.whitelist || []).map((u) => String(u).toLowerCase()));
+}
+function isWhitelisted(username) {
+  return whitelistSet().has(String(username).toLowerCase());
+}
+async function toggleWhitelist(username) {
+  const u = String(username).toLowerCase();
+  const cur = [...whitelistSet()];
+  const next = cur.includes(u) ? cur.filter((x) => x !== u) : [...cur, u];
+  await chrome.runtime.sendMessage({ type: 'igf-settings-update', settings: { whitelist: next } });
+}
+function matchesTypeFilter(u) {
+  if (filterType === 'verified') return !!u.is_verified;
+  if (filterType === 'private') return !!u.is_private;
+  return true;
+}
+function itemHtml(u, { showStar = false } = {}) {
   const tags = [];
   if (u.is_private) tags.push('<span class="tag private">privado</span>');
   if (u.is_verified) tags.push('<span class="tag verified">✓</span>');
   const user = esc(u.username);
   const full = esc(u.full_name || '');
+  const starred = isWhitelisted(u.username);
+  const starBtn = showStar
+    ? `<button type="button" class="star ${starred ? 'on' : ''}" title="Lista de exceção" data-star="${user}">${starred ? '★' : '☆'}</button>`
+    : '';
   return `
     <div class="item" data-u="${user}">
       ${avatarImg(u)}
@@ -145,6 +172,7 @@ function itemHtml(u) {
         <span title="${full}">${full}</span>
       </div>
       ${tags.join('')}
+      ${starBtn}
     </div>`;
 }
 
@@ -168,9 +196,11 @@ function eventHtml(e) {
 function computeLists() {
   const fKeys = new Set(Object.keys(followers));
   const gKeys = Object.keys(following);
-  const nonFollowers = gKeys.filter((u) => !fKeys.has(u));
+  const nonFollowersAll = gKeys.filter((u) => !fKeys.has(u));
   const mutual = gKeys.filter((u) => fKeys.has(u));
-  return { nonFollowers, mutual };
+  const fans = Object.keys(followers).filter((u) => !following[u]);
+  const nonFollowers = nonFollowersAll.filter((u) => !isWhitelisted(u));
+  return { nonFollowers, nonFollowersAll, mutual, fans };
 }
 
 function renderHeader() {
@@ -229,12 +259,13 @@ function renderError() {
 }
 
 function renderTabs() {
-  const { nonFollowers, mutual } = computeLists();
-  const nEvents = events.length;
+  const { nonFollowers, nonFollowersAll, mutual, fans } = computeLists();
   const tabs = [
-    { key: TABS.nonFollowers, label: `Não seguem de volta (${nonFollowers.length})` },
-    { key: TABS.events, label: `Deixaram de seguir (${nEvents})` },
-    { key: TABS.mutual, label: `Seguem de volta (${mutual.length})` },
+    { key: TABS.nonFollowers, label: `Não seguem (${nonFollowers.length})` },
+    { key: TABS.fans, label: `Te seguem (${fans.length})` },
+    { key: TABS.mutual, label: `Mútuos (${mutual.length})` },
+    { key: TABS.events, label: `Deixaram (${events.length})` },
+    { key: TABS.newFollowers, label: `Novos (${newFollowers.length})` },
   ];
   el.tabs().innerHTML = tabs
     .map((t) => `<button class="tab ${t.key === tab ? 'active' : ''}" data-tab="${t.key}">${t.label}</button>`)
@@ -242,6 +273,109 @@ function renderTabs() {
   el.tabs().querySelectorAll('.tab').forEach((b) => {
     b.onclick = () => { tab = b.dataset.tab; shown = 0; render(); };
   });
+  const wlCount = nonFollowersAll.length - nonFollowers.length;
+  const meta = el.meta();
+  if (meta) {
+    const base = state.ownUsername ? `@${state.ownUsername} · listas completas` : '';
+    meta.textContent = wlCount > 0 ? `${base} · ${wlCount} exceção(ões)` : base;
+  }
+}
+
+
+function renderToolbar() {
+  const bar = el.toolbar();
+  if (!bar) return;
+  const chips = [
+    { key: 'all', label: 'Todos' },
+    { key: 'verified', label: 'Verificados' },
+    { key: 'private', label: 'Privados' },
+  ];
+  const showWlToggle = tab === TABS.nonFollowers;
+  bar.innerHTML = `
+    <div class="chip-row">
+      ${chips.map((c) => `<button type="button" class="chip ${filterType === c.key ? 'active' : ''}" data-filter="${c.key}">${c.label}</button>`).join('')}
+      ${showWlToggle ? `<label class="wl-toggle"><input type="checkbox" id="hide-wl" ${hideWhitelist ? 'checked' : ''}/> ocultar exceções</label>` : ''}
+    </div>
+    <div class="action-row">
+      <button type="button" class="btn ghost tiny" id="export-csv">CSV</button>
+      <button type="button" class="btn ghost tiny" id="copy-list">Copiar</button>
+    </div>`;
+  bar.querySelectorAll('.chip').forEach((b) => {
+    b.onclick = () => { filterType = b.dataset.filter; shown = 0; renderList(); renderToolbar(); };
+  });
+  const wl = bar.querySelector('#hide-wl');
+  if (wl) wl.onchange = () => { hideWhitelist = wl.checked; shown = 0; render(); };
+  const ex = bar.querySelector('#export-csv');
+  if (ex) ex.onclick = exportCsv;
+  const cp = bar.querySelector('#copy-list');
+  if (cp) cp.onclick = copyList;
+}
+
+function tabRowsForExport() {
+  const q = query.trim().toLowerCase();
+  const { nonFollowers, nonFollowersAll, mutual, fans } = computeLists();
+  if (tab === TABS.events) {
+    return events
+      .filter((e) => !q || e.username.toLowerCase().includes(q) || (e.fullName || '').toLowerCase().includes(q))
+      .map((e) => ({ username: e.username, full_name: e.fullName || '', is_verified: false, is_private: false }));
+  }
+  if (tab === TABS.newFollowers) {
+    return newFollowers
+      .filter((e) => !q || e.username.toLowerCase().includes(q) || (e.fullName || '').toLowerCase().includes(q))
+      .map((e) => ({ username: e.username, full_name: e.fullName || '', is_verified: false, is_private: false }));
+  }
+  let keys;
+  let map;
+  if (tab === TABS.nonFollowers) {
+    keys = hideWhitelist ? nonFollowers : nonFollowersAll;
+    map = following;
+  } else if (tab === TABS.fans) {
+    keys = fans;
+    map = followers;
+  } else {
+    keys = mutual;
+    map = following;
+  }
+  return keys
+    .map((u) => map[u])
+    .filter(Boolean)
+    .filter((u) => matchesTypeFilter(u))
+    .filter((u) => !q || u.username.toLowerCase().includes(q) || (u.full_name || '').toLowerCase().includes(q));
+}
+
+function exportCsv() {
+  const rows = tabRowsForExport();
+  const lines = ['username,nome,verificado,privado'];
+  for (const u of rows) {
+    const cols = [
+      u.username,
+      (u.full_name || '').replace(/"/g, '""'),
+      u.is_verified ? 'sim' : 'nao',
+      u.is_private ? 'sim' : 'nao',
+    ];
+    lines.push(cols.map((c) => /[",\n]/.test(c) ? `"${c}"` : c).join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `igfollowguard-${tab}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function copyList() {
+  const text = tabRowsForExport().map((u) => u.username).join('\n');
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
 }
 
 function renderList() {
@@ -279,7 +413,7 @@ function renderList() {
 }
 
 function renderMeta() {
-  el.meta().textContent = state.ownUsername ? `@${state.ownUsername} · listas completas` : '';
+  // counts shown in renderTabs
 }
 
 function renderSettings() {
@@ -324,7 +458,7 @@ function openProfile(username) {
 
 async function load() {
   const o = await chrome.storage.local.get([
-    'igf.state', 'igf.settings', 'igf.followers', 'igf.following', 'igf.unfollowEvents',
+    'igf.state', 'igf.settings', 'igf.followers', 'igf.following', 'igf.unfollowEvents', 'igf.newFollowerEvents',
   ]);
   state = o['igf.state'] || { status: 'idle' };
   settings = o['igf.settings'] || {};
@@ -349,8 +483,8 @@ async function load() {
 // --- events ----------------------------------------------------------------
 el.refresh().onclick = sendSync;
 el.cardK().onclick = () => { tab = TABS.nonFollowers; shown = 0; render(); };
-el.cardF().onclick = () => { tab = TABS.mutual; shown = 0; render(); };
-el.cardM().onclick = () => { tab = TABS.mutual; shown = 0; render(); };
+el.cardF().onclick = () => { tab = TABS.fans; shown = 0; render(); };
+el.cardM().onclick = () => { tab = TABS.nonFollowers; shown = 0; render(); };
 el.search().addEventListener('input', (e) => { query = e.target.value; shown = 0; renderList(); });
 el.interval().addEventListener('change', async (e) => {
   await chrome.runtime.sendMessage({

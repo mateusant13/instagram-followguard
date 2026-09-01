@@ -2,7 +2,7 @@
 'use strict';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diffAndRecord, mergeEvents } from './diff.mjs';
+import { diffAndRecord, mergeEvents, detectNewFollowers } from './diff.mjs';
 
 const meta = (pk, name = '') => ({ pk: String(pk), username: 'u', full_name: name, is_private: false, is_verified: false, profile_pic_url: '' });
 const map = (o) => new Map(Object.entries(o));
@@ -70,4 +70,13 @@ test('mergeEvents empty stored keeps fresh', () => {
   const merged = mergeEvents([{ username: 'a' }], [], 100);
   assert.equal(merged.length, 1);
   assert.equal(merged[0].username, 'a');
+});
+
+test('detectNewFollowers finds accounts absent from previous snapshot', () => {
+  const prev = { a: meta(1) };
+  const next = map({ a: meta(1), b: meta(2), c: meta(3) });
+  const found = detectNewFollowers(prev, next, 5000);
+  assert.equal(found.length, 2);
+  assert.deepEqual(found.map((e) => e.username).sort(), ['b', 'c']);
+  assert.equal(found[0].detectedAt, 5000);
 });
