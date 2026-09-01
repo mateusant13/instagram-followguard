@@ -195,7 +195,17 @@
     if (ev.origin !== extOrigin) return;
     if (!ev.data || !host || !panel) return;
     if (ev.data.type === 'igf-close-panel' && panel) panel.style.display = 'none';
-    if (ev.data.type === 'igf-panel-ready') panelReady = true;
+    if (ev.data.type === 'igf-panel-ready' && !panelReady) {
+      panelReady = true;
+      try {
+        const fab = host.shadowRoot && host.shadowRoot.querySelector('button');
+        if (fab) {
+          const label = `${fab.title} · painel OK`;
+          fab.title = label;
+          fab.setAttribute('aria-label', label);
+        }
+      } catch { /* best-effort */ }
+    }
   });
 
   chrome.runtime.onMessage.addListener((msg) => {

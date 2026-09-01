@@ -209,6 +209,7 @@ let runningSync = null;
 // actually serve, and the transport self-heals mid-sync (a closed/navigated
 // tab re-ensures a fresh one instead of retrying into a dead listener).
 let syncTabId = null;   // tab the active sync is using
+let pinnedForeignTabId = null; // user-owned IG tab we marked non-discardable
 let openedTabId = null; // tab we created for the sync (must be closed after)
 
 async function pingProxy(tabId) {
@@ -229,11 +230,20 @@ async function waitForProxy(tabId, timeoutMs) {
   return false;
 }
 
-async function pinSyncTab(active) {
+async function pinSyncTab(active, { hint = false } = {}) {
   if (syncTabId == null) return;
   try {
-    if (active) await chrome.tabs.update(syncTabId, { autoDiscardable: false });
-    await chrome.tabs.sendMessage(syncTabId, { igf: 'sync-hint', active: !!active });
+    if (active) {
+      await chrome.tabs.update(syncTabId, { autoDiscardable: false });
+      if (openedTabId == null) pinnedForeignTabId = syncTabId;
+    } else if (pinnedForeignTabId === syncTabId) {
+      await chrome.tabs.update(syncTabId, { autoDiscardable: true }).catch(() => {});
+      pinnedForeignTabId = null;
+    }
+    // Banner only during real sync runs — not igf-get-own tab ensure.
+    if (!active || hint) {
+      await chrome.tabs.sendMessage(syncTabId, { igf: 'sync-hint', active: !!active });
+    }
   } catch { /* tab gone or listener not ready */ }
 }
 
@@ -266,11 +276,13 @@ async function ensureIgTab() {
 }
 
 function releaseIgTab() {
+  const tab = syncTabId;
   pinSyncTab(false).finally(() => {
     if (openedTabId != null) {
       chrome.tabs.remove(openedTabId).catch(() => {});
       openedTabId = null;
     }
+    if (pinnedForeignTabId === tab) pinnedForeignTabId = null;
     syncTabId = null;
   });
 }
@@ -364,6 +376,7 @@ async function sync(trigger) {
       // Cancel any pending auto-retry — a fresh manual/alarm attempt supersedes it.
       await chrome.alarms.clear(RETRY_ALARM);
       await setState({ status: 'syncing', trigger: trig, error: null, syncProgress: null });
+      await pinSyncTab(true, { hint: true });
       return await withPageTransport(async () => {
       const session = await readSession().catch((err) => err);
       if (session instanceof IgApiError) {
@@ -542,7 +555,7 @@ async function scheduleAlarm() {
   const s = await getSettings();
   await chrome.alarms.clear(SYNC_ALARM);
   if (s.autoSync) {
-    await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: Math.max(1, Number(s.refreshMinutes) || 60) });
+    await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: Math.max(1, Number(s.refreshMinutes) || 180) });
   }
 }
 
