@@ -38,9 +38,10 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
    Abra **instagram.com**, entre com sua conta e vá ao **seu perfil** — o botão colorido do IG FollowGuard aparece ao lado da engrenagem. A sincronização **começa sozinha** (mantenha uma aba do Instagram aberta).
 
 7. **Limpeza (opcional)**  
+7. **Limpeza e pasta no PC (opcional)**  
    - Pode **apagar o `.zip`** depois de extrair.  
-   - A **pasta extraída precisa ficar no PC** — o navegador lê os arquivos dela direto. Pode tirar da Área de Trabalho e guardar em outro lugar (ex.: Documentos), mas **não apague** essa pasta enquanto a extensão estiver instalada.
-
+   - A **pasta extraída precisa ficar no PC** — o navegador lê os arquivos dela direto. **Não apague** essa pasta enquanto a extensão estiver instalada.  
+   - **Quer guardar em outro lugar** (ex.: Documentos, em vez da Área de Trabalho)? **Não basta arrastar a pasta depois de instalada** — o navegador continua apontando para o caminho antigo e a extensão para de funcionar. Faça assim: **mova a pasta para o lugar desejado** e **instale de novo** a partir dali (arraste a pasta para a página de extensões ou use **Carregar sem compactação** e escolha a pasta no novo local). Se já tinha instalado na Área de Trabalho, pode **remover** a extensão antiga na página de extensões antes — seus dados no navegador não somem só por isso, mas faça **Exportar backup** se quiser garantia.
 ---
 
 ## Primeiro uso
