@@ -301,5 +301,468 @@ async function ensureIgTab() {
   await pinSyncTab(true);
 }
 
+function releaseIgTab() {
+  const tab = syncTabId;
+  pinSyncTab(false).finally(() => {
+    if (openedTabId != null) {
+      chrome.tabs.remove(openedTabId).catch(() => {});
+      openedTabId = null;
+    }
+    if (pinnedForeignTabId === tab) pinnedForeignTabId = null;
+    syncTabId = null;
+  });
+}
 
-[Showing lines 1-300 of 766. Use :301 to continue]
+// Runs fn with the page-context transport installed: an IG tab is ensured
+// (opened only when none exists AND the user asked — never on a timer), every
+// request inside fn goes through content_proxy.js, and the tab/transport are
+// released after. EVERY path that talks to IG must go through this — a
+// SW-originated fetch advertises sec-fetch-site: none with forged headers,
+// the exact fingerprint the page transport removes.
+//
+// Serialized with a promise lock (same pattern as metaLock for checkpoints):
+// withPageTransport installs a MODULE-GLOBAL transport, so a concurrent
+// caller's teardown must never land between two of our fetches — e.g.
+// igf-get-own resolving the user mid-sync used to null the transport under
+// sync()'s feet (internal-error + full backoff burn). The lock makes
+// install/run/teardown atomic per caller; queueing is short in practice
+// (get-own only takes this path while ownUsername is unset, and the sync
+// sets it during its own resolution phase).
+let transportLock = Promise.resolve();
+function withPageTransport(fn) {
+  const run = transportLock.then(async () => {
+    await ensureIgTab();
+    __setTransport(pageTransport);
+    try {
+      return await fn();
+    } finally {
+      __setTransport(null);
+      releaseIgTab();
+    }
+  });
+  // Keep the chain alive even if this caller's fn rejects.
+  transportLock = run.catch(() => {});
+  return run;
+}
+
+async function pageTransport(path, _session, signal) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (signal && signal.aborted) throw new IgApiError('aborted', 'Sincronização interrompida.');
+    if (syncTabId == null) await ensureIgTab();
+    try {
+      const r = await chrome.tabs.sendMessage(syncTabId, { igf: 'fetch', path });
+      if (!r || !r.ok) {
+        throw new IgApiError('network', r && r.error === 'timeout'
+          ? 'O Instagram não respondeu em 20s.'
+          : 'Falha de rede ao falar com o Instagram.');
+      }
+      return { status: r.status, text: r.text };
+    } catch (e) {
+      // Tab lost its listener (closed/navigated mid-sync) — heal so the
+      // retry hits a live tab instead of looping into the dead one.
+      syncTabId = null;
+      await ensureIgTab();
+    }
+  }
+  throw new IgApiError('network', 'Falha de rede ao falar com o Instagram.');
+}
+
+const TRANSIENT_CODES = new Set(['http', 'network', 'rate-limited']);
+const RETRY_ALARM = 'igf-sync-retry';
+// Escalating auto-retry delays (min): a fixed 5-min retry loop for hours is a
+// bot cadence; a human checks back later, then much later. retryN is
+// persisted and reset on success; cap at 2h.
+const RETRY_DELAYS_MIN = [5, 15, 45, 120];
+
+// After a TRANSIENT failure (never login/checkpoint/gate/limit), schedule a
+// one-shot retry. Checkpoints make the auto-resume safe — it picks up from
+// the last persisted page instead of re-fetching from page 1.
+function scheduleErrorRetry(code) {
+  if (!TRANSIENT_CODES.has(code)) return;
+  getState().then(async (st) => {
+    const n = Math.min(Number(st.retryN) || 0, RETRY_DELAYS_MIN.length - 1);
+    await chrome.alarms.create(RETRY_ALARM, { delayInMinutes: RETRY_DELAYS_MIN[n] });
+    await setState({ retryN: n + 1 });
+  }).catch(() => {});
+}
+
+async function sync(trigger) {
+  if (runningSync) return runningSync;
+  const run = (async () => {
+    const t0 = Date.now();
+    const trig = trigger || 'manual';
+    try {
+      const settings0 = await getSettings();
+      if (!settings0.consentAt && trig !== 'manual') {
+        return { ok: false, skipped: 'no-consent' };
+      }
+      if (!settings0.consentAt && trig === 'manual') {
+        await saveSettings({ ...settings0, consentAt: Date.now() });
+      }
+      // Cancel any pending auto-retry — a fresh manual/alarm attempt supersedes it.
+      await chrome.alarms.clear(RETRY_ALARM);
+      await setState({ status: 'syncing', trigger: trig, error: null, syncProgress: null });
+      await pinSyncTab(true, { hint: true });
+      return await withPageTransport(async () => {
+      const session = await readSession().catch((err) => err);
+      if (session instanceof IgApiError) {
+        await setState({ status: 'error', error: session.message, errorCode: session.code, trigger: trigger || 'manual' });
+        scheduleErrorRetry(session.code);
+        return { ok: false, error: session.message };
+      }
+      const settings = await getSettings();
+      const st0 = await getState();
+      let uid = session.uid;
+      let username = st0.ownUsername || null; // runtime-resolved, never hardcoded
+      if (uid && (!username || String(uid) !== String(st0.ownUserId || ''))) {
+        username = (await resolveOwnUser(null, session, uid)).username;
+      } else if (!uid) {
+        if (!username) {
+          throw new IgApiError('not-logged-in', 'Não encontrei seu ID de usuário. Abra instagram.com logado.');
+        }
+        const info = await resolveOwnUser(username, session);
+        uid = info.uid;
+        username = info.username;
+      }
+      if (uid) await setState({ ownUserId: String(uid) });
+      if (username) await setState({ ownUsername: username });
+
+      // Lists run SEQUENTIALLY — parallel walks roughly double request pressure
+      // on Instagram and are easier to flag as automation. Progress is persisted
+      // per page; each page is checkpointed so a failure/restart resumes.
+      const partials = await readPartials(uid);
+      const listAbort = new AbortController();
+      const listOpts = (kind, resume) => ({
+        signal: listAbort.signal,
+        resume,
+        onProgress: ({ kind: k, fetched }) => setState({ syncProgress: { phase: k, fetched } }),
+        onPart: ({ seq, maxId, users }) => savePagePart(kind, uid, seq, maxId, users),
+      });
+      let following;
+      let followers;
+      try {
+        following = await fetchAllUsers('following', uid, session, listOpts('following', partials.following));
+        followers = await fetchAllUsers('followers', uid, session, listOpts('followers', partials.followers));
+      } catch (err) {
+        listAbort.abort();
+        throw err;
+      }
+
+      const stored = await chrome.storage.local.get([K.prevFollowers, K.history, K.snapshotUid]);
+      const snapshot = processSyncSnapshot({
+        storedSnapshotUid: stored[K.snapshotUid] ?? null,
+        currentUid: uid,
+        prev: stored[K.prevFollowers] || {},
+        followers,
+        following,
+        history: stored[K.history] || {},
+      });
+
+      // --- persist current lists (followers first, then following) ---
+      await chrome.storage.local.set({
+        [K.followers]: Object.fromEntries(followers),
+        [K.following]: Object.fromEntries(following),
+      });
+
+      const now = Date.now();
+
+      // --- prepend events (newest first), cap at EVENTS_MAX ---
+      const storedEvents = (await chrome.storage.local.get(K.events))[K.events] || [];
+      const allEvents = snapshot.freshBaseline
+        ? storedEvents
+        : mergeEvents(snapshot.events, storedEvents, EVENTS_MAX);
+
+      const prevFollowersObj = stored[K.prevFollowers] || {};
+      const hasPrevSnapshot = Object.keys(prevFollowersObj).length > 0;
+      const storedNewFollowers = (await chrome.storage.local.get(K.newFollowers))[K.newFollowers] || [];
+      let allNewFollowers;
+      if (snapshot.freshBaseline || !hasPrevSnapshot) {
+        allNewFollowers = [];
+      } else {
+        const newFollowerBatch = detectNewFollowers(prevFollowersObj, followers, now);
+        allNewFollowers = mergeEvents(newFollowerBatch, storedNewFollowers, EVENTS_MAX);
+      }
+      // One-time: clear bogus "everyone is new" flood from first sync with empty prev.
+      const FIX_KEY = 'igf.fixNewFollowersBaseline';
+      const fixDone = (await chrome.storage.local.get(FIX_KEY))[FIX_KEY];
+      if (!fixDone) {
+        const followerKeys = new Set(followers.keys());
+        if (
+          storedNewFollowers.length > 0
+          && storedNewFollowers.length >= followerKeys.size
+          && storedNewFollowers.every((e) => followerKeys.has(e.username))
+        ) {
+          allNewFollowers = [];
+        }
+        await chrome.storage.local.set({ [FIX_KEY]: true });
+      }
+
+      const persist = {
+        [K.prevFollowers]: Object.fromEntries(followers),
+        [K.history]: snapshot.newHistory,
+        [K.events]: allEvents,
+        [K.newFollowers]: allNewFollowers,
+      };
+      if (snapshot.snapshotUid) persist[K.snapshotUid] = snapshot.snapshotUid;
+      await chrome.storage.local.set(persist);
+      await clearPartials(); // sync complete — no resume needed anymore
+
+      // --- notifications for people we still follow who stopped following us ---
+      const notifyable = snapshot.notifyable;
+      if (notifyable.length && settings.notificationsEnabled) {
+        try {
+          await notifyUnfollows(notifyable);
+        } catch {
+          // Notifications are best-effort — a failed create must not mark a
+          // COMPLETED sync as errored.
+        }
+      }
+
+      const notFollowingBack = [...following.keys()].filter((u) => !followers.has(u));
+      await setState({
+        status: 'ok',
+        lastSyncAt: nowIso(),
+        lastDurationMs: Date.now() - t0,
+        error: null,
+        errorCode: null,
+        syncProgress: null,
+        followersCount: followers.size,
+        followingCount: following.size,
+        notFollowingBackCount: notFollowingBack.length,
+        incomplete: false,
+        retryN: 0,
+      });
+      return { ok: true, following: following.size, followers: followers.size, notFollowingBack: notFollowingBack.length, newEvents: snapshot.events.length };
+      });
+    } catch (err) {
+      const msg = err instanceof IgApiError ? err.message : String(err && err.message || err).slice(0, 200);
+      const code = err instanceof IgApiError ? err.code : null;
+      const incomplete = code === 'limit';
+      await setState({ status: 'error', error: msg, syncProgress: null, errorCode: code, incomplete });
+      scheduleErrorRetry(code); // transient only — login/checkpoint/gate never auto-retry
+      return { ok: false, error: msg };
+    } finally {
+      runningSync = null;
+    }
+  })();
+  runningSync = run;
+  return runningSync;
+}
+
+/** Resolve own user id + username (uid from ds_user_id cookie, else by username). */
+async function resolveOwnUser(username, session, knownUid) {
+  if (knownUid) {
+    // /api/v1/users/{pk}/info/ echoes the profile (no username needed).
+    // Classified + retried: a transient blip on the sync's FIRST step used to
+    // kill the whole sync with zero retries (raw fetch, no classification).
+    const body = await transientRetry(() => apiFetch(`/api/v1/users/${knownUid}/info/`, session));
+    if (body && body.user && body.user.username) {
+      return { uid: knownUid, username: body.user.username };
+    }
+    throw new IgApiError('http', 'Instagram respondeu com uma resposta inesperada.');
+  }
+  if (username) {
+    const params = new URLSearchParams({ username });
+    const body = await transientRetry(() => apiFetch(`/api/v1/users/web_profile_info/?${params.toString()}`, session));
+    if (body && body.data && body.data.user && body.data.user.username) {
+      return { uid: String(body.data.user.id), username: body.data.user.username };
+    }
+    throw new IgApiError('http', 'Instagram respondeu com uma resposta inesperada.');
+  }
+  throw new IgApiError('not-logged-in', 'Não encontrei seu ID de usuário. Abra instagram.com logado.');
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+export async function notifyUnfollows(events) {
+  const N = events.length;
+  if (N <= 5) {
+    for (const e of events) {
+      await chrome.notifications.create(`igf-uf-${e.username}-${e.detectedAt}`, {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('images/icon128.png'),
+        title: `${e.username} deixou de te seguir`,
+        message: e.fullName ? `${e.fullName} — você ainda segue esta conta.` : 'Você ainda segue esta conta.',
+        priority: 1,
+      });
+    }
+    return;
+  }
+  await chrome.notifications.create(`igf-uf-summary-${Date.now()}`, {
+    type: 'basic',
+    iconUrl: chrome.runtime.getURL('images/icon128.png'),
+    title: `${N} pessoas deixaram de te seguir`,
+    message: `Abre o IG FollowGuard para ver as últimas ${Math.min(N, EVENTS_MAX)}.`,
+    priority: 1,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Alarms + lifecycle
+// ---------------------------------------------------------------------------
+
+async function scheduleAlarm() {
+  const s = await getSettings();
+  await chrome.alarms.clear(SYNC_ALARM);
+  if (s.autoSync) {
+    await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: Math.max(1, Number(s.refreshMinutes) || 60) });
+  }
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== SYNC_ALARM && alarm.name !== RETRY_ALARM) return;
+  // Background syncs run only while an IG tab exists — the requests must
+  // LOOK like page requests (see pageTransport). No IG tab open = nobody is
+  // on Instagram = skip; the next panel open / alarm with a tab handles it.
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://www.instagram.com/*' });
+    if (!tabs.length) return;
+  } catch {
+    return;
+  }
+  sync(alarm.name === SYNC_ALARM ? 'alarm' : 'retry');
+});
+
+chrome.runtime.onInstalled.addListener(async (details) => {
+  await scheduleAlarm();
+  if (details.reason === 'install') {
+    const s = await getSettings();
+    if (s.consentAt) await sync('install');
+  }
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  await scheduleAlarm();
+  const s = await getSettings();
+  if (s.autoSync && s.consentAt) sync('startup');
+});
+
+// ---------------------------------------------------------------------------
+// Messages (dashboard popup / panel -> background)
+// ---------------------------------------------------------------------------
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg || !msg.type || !msg.type.startsWith('igf-')) return false;
+  if (msg.type === 'igf-sync') {
+    sync(msg.trigger || 'manual').then(sendResponse);
+    return true;
+  }
+  if (msg.type === 'igf-get-own') {
+    // Logged-in profile, resolved from the session at runtime (never hardcoded).
+    (async () => {
+      const st = await getState();
+      if (st.ownUsername) {
+        sendResponse({ ok: true, username: st.ownUsername, uid: st.ownUserId ? String(st.ownUserId) : null });
+        return;
+      }
+      const session = await readSession().catch((err) => err);
+      if (session instanceof IgApiError) {
+        sendResponse({ ok: false, error: session.message });
+        return;
+      }
+      let uid = session.uid;
+      let username = null;
+      try {
+        // Same page-context transport as sync() — the user-resolution request
+        // must NOT be a SW fetch (fingerprint). The FAB/panel on an IG page
+        // reuses the user's own tab; nothing is closed.
+        username = await withPageTransport(async () => {
+          if (uid) {
+            return (await resolveOwnUser(null, session, uid)).username;
+          }
+          throw new IgApiError('not-logged-in', 'Não encontrei seu ID de usuário. Abra instagram.com logado.');
+        });
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          error: err instanceof IgApiError ? err.message : String(err && err.message || err),
+        });
+        return;
+      }
+      if (uid) await setState({ ownUserId: String(uid) });
+      if (username) await setState({ ownUsername: username });
+      sendResponse({ ok: !!(uid && username), username: username || null, uid: uid ? String(uid) : null });
+    })();
+    return true;
+  }
+  if (msg.type === 'igf-settings-update') {
+    (async () => {
+      const s = await getSettings();
+      const next = { ...s, ...(msg.settings || {}) };
+      await saveSettings(next);
+      await scheduleAlarm();
+      sendResponse({ ok: true, settings: next });
+    })();
+    return true;
+  }
+  if (msg.type === 'igf-delete-all') {
+    (async () => {
+      await deleteAllData();
+      await scheduleAlarm();
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+  if (msg.type === 'igf-export-backup') {
+    (async () => {
+      try {
+        const backup = await exportBackup();
+        sendResponse({ ok: true, backup });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err && err.message || err) });
+      }
+    })();
+    return true;
+  }
+  if (msg.type === 'igf-import-backup') {
+    (async () => {
+      try {
+        await importBackup(msg.backup);
+        await scheduleAlarm();
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err && err.message || err) });
+      }
+    })();
+    return true;
+  }
+  if (msg.type === 'igf-open-profile') {
+    chrome.tabs.create({ url: `https://www.instagram.com/${encodeURIComponent(msg.username)}/` });
+    sendResponse({ ok: true });
+    return false;
+  }
+  return false;
+});
+
+chrome.notifications.onClicked.addListener((id) => {
+  const m = id.match(/^igf-uf-(.+?)-\d+$/);
+  if (m) {
+    chrome.tabs.create({ url: `https://www.instagram.com/${encodeURIComponent(m[1])}/` });
+    chrome.notifications.clear(id);
+  }
+});
+
+// Initial alarm (SW may restart without onInstalled).
+scheduleAlarm().catch(() => {});
+
+// A SW restart mid-sync would leave status='syncing' forever (the UI shows an
+// endless spinner). On every SW start, clear any stale syncing state — a live
+// sync can't coexist with a restart, so this is always safe.
+(async () => {
+  try {
+    const st = await getState();
+    if (st.status === 'syncing') {
+      await setState({ status: 'idle', syncProgress: null });
+    }
+  } catch { /* storage unavailable — next sync overwrites anyway */ }
+})();
+
+// One-time cleanup: drop pre-v2 checkpoint keys ('igf.part.*' — torn-content
+// hazard written by the build that restarted the page counter at 0). The new
+// namespace is 'igf.resume.'; old keys are never read, just garbage.
+chrome.storage.local.get(null).then((all) => {
+  const stale = Object.keys(all).filter((k) => k.startsWith('igf.part.'));
+  if (stale.length) chrome.storage.local.remove(stale);
+}).catch(() => {});
