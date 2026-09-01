@@ -5,7 +5,7 @@
 'use strict';
 
 import { readSession, fetchAllUsers, IgApiError, buildResume, apiFetch, transientRetry, jitteredPauseMs, __setTransport } from './ig_api.mjs';
-import { diffAndRecord, mergeEvents, detectNewFollowers } from './diff.mjs';
+import { diffAndRecord, mergeEvents, detectNewFollowers, applyManualUnfollow } from './diff.mjs';
 
 const K = {
   settings: 'igf.settings',
@@ -19,7 +19,6 @@ const K = {
   snapshotUid: 'igf.snapshotUid',
 };
 const EVENTS_MAX = 100;
-export const MANUAL_COOLDOWN_MIN = 15; // min between manual full syncs
 const SYNC_ALARM = 'igf-sync';
 const DEFAULT_SETTINGS = {
   // No username here: the logged-in profile is resolved at runtime from the
@@ -80,12 +79,25 @@ export function processSyncSnapshot({
 }
 
 
+/** Dynamic manual-sync cooldown (ms) — scales with list size. */
+export function manualSyncCooldownMs(followersCount = 0, followingCount = 0) {
+  const total = Math.max(0, Number(followersCount) || 0) + Math.max(0, Number(followingCount) || 0);
+  const minutes = Math.min(45, Math.max(5, 5 + Math.floor(total / 500)));
+  return minutes * 60 * 1000;
+}
+
 /** Pure helper — blocks manual re-sync shortly after a successful full sync. */
-export function manualSyncCooldownInfo(lastSyncAt, now = Date.now()) {
-  if (!lastSyncAt) return { blocked: false, waitMs: 0, waitMinutes: 0, nextSyncAt: null };
+export function manualSyncCooldownInfo(lastSyncAt, opts = {}, now = Date.now()) {
+  const followersCount = opts.followersCount ?? 0;
+  const followingCount = opts.followingCount ?? 0;
+  const freeRefreshPending = !!opts.freeRefreshPending;
+  if (!lastSyncAt) return { blocked: false, waitMs: 0, waitMinutes: 0, nextSyncAt: null, freeRefresh: false };
+  if (freeRefreshPending) {
+    return { blocked: false, waitMs: 0, waitMinutes: 0, nextSyncAt: null, freeRefresh: true };
+  }
   const elapsed = now - new Date(lastSyncAt).getTime();
-  const waitMs = MANUAL_COOLDOWN_MIN * 60 * 1000;
-  if (elapsed >= waitMs) return { blocked: false, waitMs: 0, waitMinutes: 0, nextSyncAt: null };
+  const waitMs = manualSyncCooldownMs(followersCount, followingCount);
+  if (elapsed >= waitMs) return { blocked: false, waitMs: 0, waitMinutes: 0, nextSyncAt: null, freeRefresh: false };
   const remainMs = waitMs - elapsed;
   const waitMinutes = Math.max(1, Math.ceil(remainMs / 60000));
   return {
@@ -93,6 +105,20 @@ export function manualSyncCooldownInfo(lastSyncAt, now = Date.now()) {
     waitMs: remainMs,
     waitMinutes,
     nextSyncAt: new Date(now + remainMs).toISOString(),
+    freeRefresh: false,
+  };
+}
+
+/** Apply a user-initiated unfollow to persisted maps (tests + runtime). */
+export function recordManualUnfollowMaps(followingObj, followersObj, { pk, username } = {}) {
+  const result = applyManualUnfollow(followingObj, followersObj, { pk, username });
+  if (!result) return null;
+  return {
+    followingObj: Object.fromEntries(result.following),
+    removedUsername: result.removedUsername,
+    followingCount: result.followingCount,
+    followersCount: result.followersCount,
+    notFollowingBackCount: result.notFollowingBackCount,
   };
 }
 function curUid(uid) {
@@ -112,6 +138,7 @@ const emptyState = () => ({
   followingCount: 0,
   notFollowingBackCount: 0,
   incomplete: false, // true when a list was truncated by the page cap
+  freeManualRefresh: false, // one free manual refresh after each successful sync
 });
 
 async function getSettings() {
@@ -527,7 +554,12 @@ async function sync(trigger) {
       if (trig === 'manual') {
         const stCd = await getState();
         if (stCd.status === 'ok') {
-          const cd = manualSyncCooldownInfo(stCd.lastSyncAt);
+          const hadFree = __omp_shell("!stCd.freeManualRefresh;")
+          const cd = manualSyncCooldownInfo(stCd.lastSyncAt, {
+            followersCount: stCd.followersCount,
+            followingCount: stCd.followingCount,
+            freeRefreshPending: hadFree,
+          });
           if (cd.blocked) {
             return {
               ok: false,
@@ -536,6 +568,7 @@ async function sync(trigger) {
               nextSyncAt: cd.nextSyncAt,
             };
           }
+          if (hadFree) await setState({ freeManualRefresh: false });
         }
       }
       if (!settings0.consentAt && !autoConsent && trig !== 'manual') {
@@ -678,6 +711,7 @@ async function sync(trigger) {
         notFollowingBackCount: notFollowingBack.length,
         incomplete: false,
         retryN: 0,
+        freeManualRefresh: true,
       });
       return { ok: true, following: following.size, followers: followers.size, notFollowingBack: notFollowingBack.length, newEvents: snapshot.events.length };
       });
@@ -803,6 +837,20 @@ chrome.runtime.onStartup.addListener(async () => {
   if (s.autoSync && s.consentAt) sync('startup');
 });
 
+
+async function recordManualUnfollow({ pk, username } = {}) {
+  const stored = await chrome.storage.local.get([K.following, K.followers, K.state]);
+  const patch = recordManualUnfollowMaps(stored[K.following] || {}, stored[K.followers] || {}, { pk, username });
+  if (!patch) return { ok: false, skipped: 'unknown' };
+  await chrome.storage.local.set({ [K.following]: patch.followingObj });
+  await setState({
+    followingCount: patch.followingCount,
+    followersCount: patch.followersCount,
+    notFollowingBackCount: patch.notFollowingBackCount,
+  });
+  return { ok: true, username: patch.removedUsername };
+}
+
 // ---------------------------------------------------------------------------
 // Messages (dashboard popup / panel -> background)
 // ---------------------------------------------------------------------------
@@ -890,6 +938,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: false, error: String(err && err.message || err) });
       }
     })();
+    return true;
+  }
+  if (msg.type === 'igf-manual-unfollow') {
+    recordManualUnfollow({ pk: msg.pk, username: msg.username }).then(sendResponse);
     return true;
   }
   if (msg.type === 'igf-open-profile') {

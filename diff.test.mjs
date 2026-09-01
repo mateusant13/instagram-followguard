@@ -2,7 +2,7 @@
 'use strict';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diffAndRecord, mergeEvents, detectNewFollowers } from './diff.mjs';
+import { diffAndRecord, mergeEvents, detectNewFollowers, applyManualUnfollow } from './diff.mjs';
 
 const meta = (pk, name = '') => ({ pk: String(pk), username: 'u', full_name: name, is_private: false, is_verified: false, profile_pic_url: '' });
 const map = (o) => new Map(Object.entries(o));
@@ -84,4 +84,14 @@ test('detectNewFollowers finds accounts absent from previous snapshot', () => {
   assert.equal(found.length, 2);
   assert.deepEqual(found.map((e) => e.username).sort(), ['b', 'c']);
   assert.equal(found[0].detectedAt, 5000);
+});
+
+
+test('applyManualUnfollow removes by pk and recomputes not-following-back', () => {
+  const following = { a: { pk: '1', username: 'a' }, b: { pk: '2', username: 'b' } };
+  const followers = { c: { pk: '3', username: 'c' } };
+  const r = applyManualUnfollow(following, followers, { pk: '2' });
+  assert.equal(r.removedUsername, 'b');
+  assert.equal(r.followingCount, 1);
+  assert.equal(r.notFollowingBackCount, 1);
 });

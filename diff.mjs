@@ -81,3 +81,28 @@ export function detectNewFollowers(prev, next, now) {
   }
   return events;
 }
+
+/**
+ * Remove one account from the local following map after the user unfollows on IG.
+ * Returns null when nothing changed.
+ */
+export function applyManualUnfollow(following, followers, { pk, username } = {}) {
+  const gMap = following instanceof Map ? following : new Map(Object.entries(following || {}));
+  const fMap = followers instanceof Map ? followers : new Map(Object.entries(followers || {}));
+  let key = username && gMap.has(username) ? username : null;
+  if (!key && pk) {
+    for (const [u, meta] of gMap) {
+      if (meta && String(meta.pk || '') === String(pk)) { key = u; break; }
+    }
+  }
+  if (!key || !gMap.has(key)) return null;
+  gMap.delete(key);
+  const notFollowingBack = [...gMap.keys()].filter((u) => !fMap.has(u)).length;
+  return {
+    following: gMap,
+    removedUsername: key,
+    followingCount: gMap.size,
+    followersCount: fMap.size,
+    notFollowingBackCount: notFollowingBack,
+  };
+}

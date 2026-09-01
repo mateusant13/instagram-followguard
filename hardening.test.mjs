@@ -45,7 +45,7 @@ globalThis.document = {
 };
 globalThis.parent = { postMessage() {} };
 
-const { deleteAllData, manualSyncCooldownInfo, MANUAL_COOLDOWN_MIN } = await import('./background.js');
+const { deleteAllData, manualSyncCooldownInfo, manualSyncCooldownMs, recordManualUnfollowMaps } = await import('./background.js');
 
 test('delete-all wipes every igf.* key incl. resume.* and resets defaults', async () => {
   Object.assign(store, {
@@ -73,15 +73,38 @@ test('delete-all wipes every igf.* key incl. resume.* and resets defaults', asyn
 globalThis.__IGF_SKIP_UI_BOOT__ = true;
 const { itemHtml } = await import('./dashboard.js');
 
-test('manual sync cooldown blocks for 15 minutes after last sync', () => {
+test('manual sync cooldown scales with follower count', () => {
+  const small = manualSyncCooldownMs(200, 100);
+  const big = manualSyncCooldownMs(20000, 15000);
+  assert.equal(small, 5 * 60 * 1000);
+  assert.ok(big > small);
   const last = new Date('2026-01-01T12:00:00.000Z').toISOString();
-  const now = new Date('2026-01-01T12:05:00.000Z').getTime();
-  const cd = manualSyncCooldownInfo(last, now);
+  const now = new Date('2026-01-01T12:04:00.000Z').getTime();
+  const cd = manualSyncCooldownInfo(last, { followersCount: 200, followingCount: 100 }, now);
   assert.equal(cd.blocked, true);
-  assert.equal(cd.waitMinutes, 10);
-  assert.equal(MANUAL_COOLDOWN_MIN, 15);
-  const ok = manualSyncCooldownInfo(last, now + MANUAL_COOLDOWN_MIN * 60 * 1000);
+  assert.equal(cd.waitMinutes, 1);
+  const ok = manualSyncCooldownInfo(last, { followersCount: 200, followingCount: 100 }, now + small);
   assert.equal(ok.blocked, false);
+});
+
+test('free manual refresh bypasses cooldown', () => {
+  const last = new Date('2026-01-01T12:00:00.000Z').toISOString();
+  const now = new Date('2026-01-01T12:01:00.000Z').getTime();
+  const cd = manualSyncCooldownInfo(last, { followersCount: 5000, followingCount: 5000, freeRefreshPending: true }, now);
+  assert.equal(cd.blocked, false);
+  assert.equal(cd.freeRefresh, true);
+});
+
+test('recordManualUnfollowMaps removes user and updates counts', () => {
+  const following = { alice: { pk: '1', username: 'alice' }, bob: { pk: '2', username: 'bob' } };
+  const followers = { carol: { pk: '3', username: 'carol' } };
+  const patch = recordManualUnfollowMaps(following, followers, { pk: '2' });
+  assert.ok(patch);
+  assert.equal(patch.removedUsername, 'bob');
+  assert.equal(patch.followingCount, 1);
+  assert.equal(patch.notFollowingBackCount, 1);
+  assert.equal(patch.followingObj.alice.username, 'alice');
+  assert.equal(patch.followingObj.bob, undefined);
 });
 
 test('itemHtml escapes full_name XSS payload in text and title', () => {

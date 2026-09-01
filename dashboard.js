@@ -9,8 +9,8 @@ const TABS = {
   newFollowers: 'newFollowers',
 };
 const PAGE = 60;
+const INITIAL_VISIBLE = 12;
 const R = 60 * 1000;
-const MANUAL_COOLDOWN_MS = 15 * 60 * 1000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -215,10 +215,17 @@ function getLists() {
 }
 
 
+function manualSyncCooldownMsLocal() {
+  const total = (Number(state.followersCount) || 0) + (Number(state.followingCount) || 0);
+  const minutes = Math.min(45, Math.max(5, 5 + Math.floor(total / 500)));
+  return minutes * 60 * 1000;
+}
+
 function manualCooldownRemaining() {
   if (state.status !== 'ok' || !state.lastSyncAt) return 0;
+  if (state.freeManualRefresh) return 0;
   const elapsed = Date.now() - new Date(state.lastSyncAt).getTime();
-  return Math.max(0, MANUAL_COOLDOWN_MS - elapsed);
+  return Math.max(0, manualSyncCooldownMsLocal() - elapsed);
 }
 
 function formatCooldownWait(ms) {
@@ -265,10 +272,13 @@ function renderHeader() {
   }
   el.lastSync().textContent = `última: ${relTime(state.lastSyncAt)}`;
   const cdMs = manualCooldownRemaining();
-  el.refresh().disabled = state.status === 'syncing' || cdMs > 0;
-  el.refresh().title = cdMs > 0
-    ? `Próxima sincronização manual em ${formatCooldownWait(cdMs)}`
-    : 'Sincronizar agora';
+  const canRefresh = state.status !== 'syncing' && (cdMs <= 0 || !!state.freeManualRefresh);
+  el.refresh().disabled = !canRefresh;
+  el.refresh().title = state.freeManualRefresh
+    ? 'Sincronizar agora (1 atualização gratuita após a última sync)'
+    : (cdMs > 0
+      ? `Próxima sincronização manual em ${formatCooldownWait(cdMs)}`
+      : 'Sincronizar agora');
   const live = state.status === 'syncing' ? liveCounts() : null;
   el.cardK().querySelector('.count').textContent = live ? live.notBack : state.notFollowingBackCount;
   el.cardF().querySelector('.count').textContent = live ? live.followers : state.followersCount;
@@ -388,7 +398,7 @@ async function importBackupFile(file) {
 }
 
 function buildPool() {
-  const sig = `${tab}|${filterType}|${query}|${Object.keys(followers).length}|${Object.keys(following).length}`;
+  const sig = `${tab}|${filterType}|${query}|${Object.keys(followers).length}|${Object.keys(following).length}|${events.length}|${newFollowers.length}`;
   if (poolCache && poolCacheSig === sig) return poolCache;
   const { nonFollowers, mutual, fans } = getLists();
   const q = query.trim().toLowerCase();
@@ -434,7 +444,7 @@ function ensureListObserver() {
 
 function renderList() {
   const pool = buildPool();
-  const target = shown + PAGE;
+  const target = shown === 0 ? INITIAL_VISIBLE : shown + PAGE;
   const slice = pool.slice(0, target);
   const listEl = el.list();
   if (slice.length === 0) {
@@ -493,7 +503,6 @@ function scheduleRender() {
   renderRaf = requestAnimationFrame(() => {
     renderRaf = 0;
     render();
-  if (manualCooldownRemaining() > 0) showCooldownNotice(manualCooldownRemaining());
   });
 }
 
@@ -540,7 +549,7 @@ function showCooldownNotice(ms) {
 
 async function sendSync() {
   const cdMs = manualCooldownRemaining();
-  if (cdMs > 0) {
+  if (cdMs > 0 && !state.freeManualRefresh) {
     showCooldownNotice(cdMs);
     return;
   }
