@@ -283,7 +283,7 @@ function renderMeta() {
 }
 
 function renderSettings() {
-  el.interval().value = String(settings.refreshMinutes || 180);
+  el.interval().value = String(settings.refreshMinutes || 60);
   el.notif().checked = settings.notificationsEnabled !== false;
 }
 
@@ -334,7 +334,7 @@ async function load() {
   render();
   // Panel: auto-sync when data is stale (popup relies on the manual button).
   if (document.body.classList.contains('panel') && settings.consentAt) {
-    const staleMs = (settings.refreshMinutes || 180) * 60 * 1000;
+    const staleMs = (settings.refreshMinutes || 60) * 60 * 1000;
     if (!state.lastSyncAt || Date.now() - new Date(state.lastSyncAt).getTime() > staleMs) {
       sendSync();
     }

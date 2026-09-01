@@ -65,7 +65,7 @@ test('delete-all wipes every igf.* key incl. resume.* and resets defaults', asyn
   const keys = Object.keys(store).filter((k) => k.startsWith('igf.'));
   assert.deepEqual(keys.sort(), ['igf.settings', 'igf.state']);
   assert.equal(store['igf.settings'].consentAt, null);
-  assert.equal(store['igf.settings'].refreshMinutes, 180);
+  assert.equal(store['igf.settings'].refreshMinutes, 60);
   assert.equal(store['igf.state'].status, 'idle');
   assert.equal(store['other.key'], 'keep');
 });

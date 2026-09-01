@@ -22,7 +22,7 @@ const SYNC_ALARM = 'igf-sync';
 const DEFAULT_SETTINGS = {
   // No username here: the logged-in profile is resolved at runtime from the
   // session cookie (ds_user_id -> /api/v1/users/{pk}/info/). Never hardcode.
-  refreshMinutes: 180,
+  refreshMinutes: 60,
   notificationsEnabled: true,
   autoSync: true,
   consentAt: null,
@@ -555,7 +555,7 @@ async function scheduleAlarm() {
   const s = await getSettings();
   await chrome.alarms.clear(SYNC_ALARM);
   if (s.autoSync) {
-    await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: Math.max(1, Number(s.refreshMinutes) || 180) });
+    await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: Math.max(1, Number(s.refreshMinutes) || 60) });
   }
 }
 

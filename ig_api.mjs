@@ -12,10 +12,10 @@ const PAGE_SIZE = 24;               // web-app follow-list page size — the web
 // Humanized pacing base (ms/page). Fixed-interval loops are the #1 bot
 // fingerprint; the web app paces by the user's SCROLL — variable gaps and
 // pauses. pageDelayMs is the BASE: real gaps are randomized around it and
-// ~10% of pauses are 2-5.5× longer ("reading" the list). count=24 × ~2.6s
+// ~10% of pauses are 2-5.5× longer ("reading" the list). count=24 × ~2.0s
 // avg ≈ a real person scrolling the dialog; 1048 accounts take ~2min (the
 // web app itself would take as long).
-const PAGE_DELAY_MS = 2000;
+const PAGE_DELAY_MS = 1500;
 const FETCH_TIMEOUT_MS = 20000;     // per-request timeout — a throttled IG connection hangs forever without one
 const MAX_PAGES = 500;              // hard cap per list (500*24 = 12k users)
 const MAX_RETRIES = 5;              // consecutive transient failures
