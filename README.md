@@ -1,48 +1,80 @@
 # IG FollowGuard
 
-Extensão para Chrome que mostra **quem não te segue de volta** no Instagram e te **notifica quando alguém deixa de te seguir** (guarda os últimos 100 eventos).
+Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém deixa de te seguir.
 
-- Painel com **todas** as contas: quem você segue e não te segue de volta, quem segue de volta e quem deixou de seguir.
-- Notificação quando alguém que você segue deixa de te seguir.
-- Botão flutuante aparece só no **seu** perfil, ao lado da engrenagem de configurações (detecta a conta logada automaticamente).
-- **Não lê mensagens nem DMs** — só relações de seguir/seguidores, usando a sessão do seu próprio navegador.
+---
 
-## Instalação
+## Instalar (primeira vez)
 
-1. Baixe este repositório: **Code → Download ZIP** e extraia numa pasta.
-2. No Chrome, abra `chrome://extensions`.
-3. Ative o **Modo do desenvolvedor** (chave no canto superior direito).
-4. Clique em **Carregar sem compactação** e selecione a pasta extraída (a raiz onde está o `manifest.json`).
-5. Pronto. Abra o Instagram logado: um botão flutuante aparece no topo do seu perfil, e o ícone da extensão na barra do Chrome abre o painel completo.
+1. **Baixe o ZIP**  
+   No GitHub, clique em **Code** (ou **Código**) → **Download ZIP**.  
+   Extraia o arquivo — vai aparecer uma pasta (ex.: `instagram-followguard-main`).
 
-## Atualizar sem perder dados
+2. **Abra as extensões do Chrome**  
+   Na barra de endereço do Chrome, cole e Enter:  
+   `chrome://extensions`
 
-Os dados ficam no **Chrome**, ligados à **instalação** da extensão (ID interno). Se você **remover** a extensão antiga e **carregar de novo** outra pasta, a lista some — isso é comportamento do Chrome, não bug da extensão.
+3. **Ative o modo desenvolvedor**  
+   No canto superior direito, ligue a chave **Modo do desenvolvedor**.
 
-**Forma certa de atualizar:**
+4. **Carregue a extensão**  
+   Clique em **Carregar sem compactação** (ou **Load unpacked**).  
+   Escolha a pasta que você extraiu (a que tem o arquivo `manifest.json` dentro).
 
-1. Na instalação antiga, use **Exportar backup** no rodapé do painel (guarde o `.json`).
-2. Substitua os arquivos **na mesma pasta** que já está carregada no Chrome (ou extraia o ZIP por cima).
-3. Em `chrome://extensions`, clique em **Recarregar** na extensão IG FollowGuard (não remova).
-4. Se você precisou instalar de novo do zero, use **Importar backup** no painel.
+5. **Pronto**  
+   Fixe o ícone do IG FollowGuard na barra do Chrome se quiser.  
+   Entre no **instagram.com** com sua conta. No **seu perfil**, aparece um botão flutuante; o ícone da extensão abre o painel.
 
-**Nunca** remova a extensão antes de exportar o backup, se quiser manter o histórico.
+---
 
-## Como funciona
+## Primeiro uso
 
-- Usa a sessão logada do seu navegador (cookies do instagram.com) para listar seguidores e seguindo — sem senha.
-- Sincroniza automaticamente (a cada 60 minutos, configurável no painel) e compara com a lista anterior para detectar quem parou de seguir.
-- Os dados ficam **somente no seu Chrome** (`chrome.storage.local`), nada é enviado para servidores externos.
+1. Esteja **logado** no Instagram no mesmo Chrome.
+2. Abra o painel (ícone da extensão ou botão no seu perfil).
+3. Toque em **↻ Sincronizar** (ou aguarde — o painel pode sincronizar sozinho).
+4. **Não feche a aba do Instagram** enquanto aparecer “sincronizando…”. Pode deixar em segundo plano.
 
-## Requisitos
+**Quanto tempo demora?** Depende do tamanho das suas listas. O app busca de **24 em 24** contas, com pausa entre cada página (como alguém rolando a lista no celular). Exemplos aproximados:
 
-- Chrome (Manifest V3)
-- Conta do Instagram logada no navegador
+| Seguidores + seguindo (total de páginas) | Tempo só de pausas |
+|----------------------------------------|-------------------|
+| ~100 contas (~9 páginas) | ~20–40 segundos |
+| ~500 contas (~42 páginas) | ~2–3 minutos |
+| ~1000 contas (~84 páginas) | ~4–6 minutos |
 
-## Testes
+Se você tem poucos seguidores (ex.: 93), a primeira sync pode parecer **rápida** — isso é normal, não é bug.
 
-```bash
-node --test diff.test.mjs notify.test.mjs partial.test.mjs
-```
+---
+
+## Atualizar para versão nova
+
+**Não apague a extensão** se quiser manter suas listas.
+
+1. No painel, embaixo: **Exportar backup** → guarde o arquivo `.json`.
+2. Baixe o ZIP novo e **substitua os arquivos na mesma pasta** de antes.
+3. Em `chrome://extensions`, clique em **Recarregar** no IG FollowGuard.
+
+Se já removeu e instalou de novo: **Importar backup** no painel.
+
+---
+
+## O que o painel mostra
+
+- **Não seguem** — você segue, a pessoa não te segue de volta  
+- **Te seguem** — te seguem e você não segue de volta  
+- **Mútuos** — vocês se seguem  
+- **Deixaram** — pararam de te seguir (desde a última sync)  
+- **Novos** — começaram a te seguir (a partir da **segunda** sincronização; a primeira só “marca a lista”)
+
+---
+
+## Privacidade e segurança
+
+- Usa a sessão em que você **já está logado** no Instagram — **não pede senha**.
+- **Nada é enviado** para servidores nossos: listas e histórico ficam **só no seu Chrome**.
+- A extensão **não lê mensagens nem DMs** — só quem segue / quem te segue.
+- Você pode **Apagar todos os dados** no rodapé do painel quando quiser.
+
+---
 
 Feito por [@mateusant13](https://github.com/mateusant13).
