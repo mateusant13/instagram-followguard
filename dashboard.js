@@ -285,12 +285,16 @@ async function exportBackupFile() {
     alert((res && res.error) || 'Não foi possível exportar o backup.');
     return;
   }
+  const name = `igfollowguard-backup-${new Date().toISOString().slice(0, 10)}.json`;
   const blob = new Blob([JSON.stringify(res.backup, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `igfollowguard-backup-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  const url = URL.createObjectURL(blob);
+  try {
+    await chrome.downloads.download({ url, filename: name, saveAs: false });
+  } catch {
+    alert('Não foi possível baixar o backup.');
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
 }
 
 async function importBackupFile(file) {

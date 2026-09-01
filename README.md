@@ -70,9 +70,9 @@ Se já removeu e instalou de novo: **Importar backup** no painel.
 
 - Usa a sessão em que você **já está logado** no Instagram — **não pede senha**.
 - **Nada é enviado** para servidores nossos: listas e histórico ficam **só no seu Chrome**.
-- A extensão **não lê mensagens nem DMs** — só quem segue / quem te segue.
+- A extensão não lê mensagens nem DMs — só quem você segue / quem te segue.
 - Você pode **Apagar todos os dados** no rodapé do painel quando quiser.
 
 ---
 
-Feito por [@mateusant13](https://github.com/mateusant13).
+Feito por [@mateusant13](https://github.com/mateusant13)
