@@ -7,23 +7,30 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 ## Instalar (primeira vez)
 
 1. **Baixe o ZIP**  
-   No GitHub, clique no botão verde **Code** (ou **Código**) → **Download ZIP**.  
-   Guarde o arquivo `.zip` — **não precisa extrair**.
+   No GitHub, clique no botão verde **Code** (ou **Código**) → **Download ZIP**.
 
-2. **Abra as extensões do Chrome**  
+2. **Extraia o ZIP**  
+   O jeito mais simples: abra o arquivo `.zip` que você baixou (clique duas vezes) e **arraste a pasta de dentro** para a **Área de Trabalho**.  
+   Vai aparecer uma pasta (ex.: `instagram-followguard-main`).
+
+3. **Abra as extensões do Chrome**  
    Na **barra de URL** do Chrome (onde você digita endereços de sites), **digite ou cole**:  
    `chrome://extensions`  
    e pressione Enter.
 
-3. **Ative o modo desenvolvedor**  
+4. **Ative o modo desenvolvedor**  
    No canto superior direito, ligue **Modo do desenvolvedor**.
 
-4. **Carregue a extensão**  
-   Clique em **Carregar extensão compactada** (ou **Load packed extension**).  
-   Selecione o arquivo `.zip` que você baixou.
+5. **Carregue a extensão**  
+   - **Opção A:** arraste a pasta da Área de Trabalho para dentro da página `chrome://extensions`, **ou**  
+   - **Opção B:** clique em **Carregar sem compactação** (ou **Load unpacked**) e escolha essa pasta.
 
-5. **Pronto**  
+6. **Pronto**  
    Abra **instagram.com**, entre com sua conta e vá ao **seu perfil** — o botão colorido do IG FollowGuard aparece ao lado da engrenagem. A sincronização **começa sozinha** (mantenha uma aba do Instagram aberta).
+
+7. **Limpeza (opcional)**  
+   - Pode **apagar o `.zip`** depois de extrair.  
+   - A **pasta extraída precisa ficar no PC** — o Chrome lê os arquivos dela direto. Pode tirar da Área de Trabalho e guardar em outro lugar (ex.: Documentos), mas **não apague** essa pasta enquanto a extensão estiver instalada.
 
 ---
 
@@ -54,8 +61,8 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 **Não apague a extensão** se quiser manter suas listas — **remover apaga tudo** do Chrome.
 
 1. No painel, embaixo: **Exportar backup** → guarde o arquivo `.json`.
-2. Baixe o ZIP novo (não precisa extrair).
-3. Na **barra de URL**, abra `chrome://extensions` e clique em **Recarregar** no IG FollowGuard — ou remova a versão antiga e use **Carregar extensão compactada** com o ZIP novo.
+2. Baixe o ZIP novo, extraia e **substitua os arquivos na mesma pasta** de antes (a que o Chrome já usa).
+3. Na **barra de URL**, abra `chrome://extensions` e clique em **Recarregar** no IG FollowGuard.
 
 Se já removeu e instalou de novo: **Importar backup** no painel.
 
