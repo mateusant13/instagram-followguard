@@ -58,3 +58,21 @@ test('fetchListComplete propagates non-limit errors', async () => {
     (err) => err instanceof IgApiError && err.code === 'rate-limited',
   );
 });
+
+test('fetchListComplete does not loop on repeated cursor limit', async () => {
+  __setSegmentPauseMsForTests(() => 0);
+  let calls = 0;
+  const fetchFn = async () => {
+    calls += 1;
+    throw new IgApiError('limit', 'cursor repeat');
+  };
+  const readPartialsFn = async () => ({
+    followers: { users: [{ username: 'bob', pk: '2' }], maxId: 'x', nextSeq: 1 },
+    following: null,
+  });
+  await assert.rejects(
+    () => fetchListComplete('followers', '99', {}, (k, r) => ({ resume: r }), readPartialsFn, { fetchFn }),
+    (err) => err instanceof IgApiError && err.code === 'limit',
+  );
+  assert.equal(calls, 2, 'must stop after one no-progress limit');
+});

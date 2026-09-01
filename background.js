@@ -391,7 +391,11 @@ export function __setSegmentPauseMsForTests(fn) { segmentPauseMsForTests = fn; }
  * Fetch a full list, auto-continuing across MAX_PAGES segments without user action.
  * On segment cap (IgApiError code=limit), pauses then resumes from persisted checkpoints.
  */
+const MAX_SEGMENT_PAUSES = 30; // safety cap (~30 × 12k users per list)
+
 export async function fetchListComplete(kind, uid, session, listOpts, readPartialsFn, { fetchFn = fetchAllUsers } = {}) {
+  let segmentPauses = 0;
+  let lastFetched = -1;
   while (true) {
     try {
       const partials = await readPartialsFn(uid);
@@ -402,6 +406,16 @@ export async function fetchListComplete(kind, uid, session, listOpts, readPartia
       const partials = await readPartialsFn(uid);
       const resume = partials[kind];
       const fetched = resume && Array.isArray(resume.users) ? resume.users.length : 0;
+      // Repeated cursor / no progress — terminal (don't pause-loop forever).
+      if (fetched === lastFetched) throw err;
+      lastFetched = fetched;
+      segmentPauses += 1;
+      if (segmentPauses >= MAX_SEGMENT_PAUSES) {
+        throw new IgApiError(
+          'limit',
+          `Lista muito grande — sincronização parou após ${fetched.toLocaleString('pt-BR')} contas (progresso guardado; tente de novo mais tarde).`,
+        );
+      }
       const pauseMs = segmentPauseMsForTests ? segmentPauseMsForTests() : segmentPauseMs();
       await setState({
         syncProgress: {
@@ -649,10 +663,10 @@ export async function notifyUnfollows(events) {
 
 async function resumeInterruptedSync() {
   try {
-    const st = await getState();
+    if (runningSync) return;
     const meta = (await chrome.storage.local.get(PART_META))[PART_META];
     if (!meta || !meta.keys || !meta.keys.length) return;
-    if (st.status === 'syncing') sync('resume');
+    sync('resume');
   } catch { /* best-effort */ }
 }
 
