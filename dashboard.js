@@ -47,7 +47,6 @@ let filterType = 'all';
 let hideWhitelist = true;
 let query = '';
 let shown = 0;
-let live = [];
 let lastOwnKey = '';
 
 
@@ -411,7 +410,6 @@ function renderList() {
       .filter((u) => matchesTypeFilter(u))
       .filter((u) => !q || u.username.toLowerCase().includes(q) || (u.full_name || '').toLowerCase().includes(q));
   }
-  live = pool;
   const slice = pool.slice(0, shown + PAGE);
   if (slice.length === 0) {
     el.list().innerHTML = '<div class="empty">Nada aqui' + (query ? ' para essa busca' : '') + '.</div>';
@@ -438,10 +436,6 @@ function renderList() {
   hydrateAvatars(el.list());
 }
 
-function renderMeta() {
-  // counts shown in renderTabs
-}
-
 function renderSettings() {
   el.interval().value = String(settings.refreshMinutes || 60);
   el.notif().checked = settings.notificationsEnabled !== false;
@@ -454,7 +448,6 @@ function render() {
   renderTabs();
   renderToolbar();
   renderList();
-  renderMeta();
   renderSettings();
 }
 
