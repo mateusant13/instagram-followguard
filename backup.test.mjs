@@ -62,6 +62,19 @@ test('importBackup restores igf.* payload', async () => {
   assert.equal(store['not-igf'], undefined);
 });
 
+test('importBackup replaces stale igf.* keys', async () => {
+  Object.keys(store).forEach((k) => delete store[k]);
+  store['igf.followers'] = { old: { pk: '1' } };
+  store['igf.history'] = { old: {} };
+  await importBackup({
+    schema: 1,
+    exportedAt: 1,
+    data: { 'igf.followers': { new: { pk: '2' } } },
+  });
+  assert.deepEqual(store['igf.followers'], { new: { pk: '2' } });
+  assert.equal(store['igf.history'], undefined);
+});
+
 test('importBackup rejects invalid payload', async () => {
   await assert.rejects(() => importBackup(null), /inválido/i);
   await assert.rejects(() => importBackup({ data: {} }), /vazio/i);
