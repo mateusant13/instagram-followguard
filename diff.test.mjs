@@ -2,7 +2,7 @@
 'use strict';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diffAndRecord, mergeEvents, detectNewFollowers, applyManualUnfollow } from './diff.mjs';
+import { diffAndRecord, mergeEvents, detectNewFollowers, applyManualUnfollow, applyFriendshipAction } from './diff.mjs';
 
 const meta = (pk, name = '') => ({ pk: String(pk), username: 'u', full_name: name, is_private: false, is_verified: false, profile_pic_url: '' });
 const map = (o) => new Map(Object.entries(o));
@@ -94,4 +94,36 @@ test('applyManualUnfollow removes by pk and recomputes not-following-back', () =
   assert.equal(r.removedUsername, 'b');
   assert.equal(r.followingCount, 1);
   assert.equal(r.notFollowingBackCount, 1);
+});
+
+test('applyFriendshipAction follow adds to following', () => {
+  const r = applyFriendshipAction('follow', {}, { c: { pk: '3', username: 'c' } }, {}, { pk: '9' }, 1000);
+  assert.ok(r);
+  assert.equal(r.followingCount, 1);
+  assert.equal(r.followingObj.id9.pk, '9');
+});
+
+test('applyFriendshipAction remove_follower drops from followers', () => {
+  const followers = { bob: { pk: '2', username: 'bob' } };
+  const r = applyFriendshipAction('remove_follower', {}, followers, {}, { pk: '2' }, 2000);
+  assert.ok(r);
+  assert.equal(r.followersCount, 0);
+  assert.equal(r.username, 'bob');
+});
+
+test('applyFriendshipAction approve adds new follower event', () => {
+  const r = applyFriendshipAction('approve', {}, {}, {}, { pk: '7' }, 3000);
+  assert.ok(r);
+  assert.equal(r.followersCount, 1);
+  assert.equal(r.newFollowers.length, 1);
+  assert.equal(r.newFollowers[0].pk, '7');
+});
+
+test('applyFriendshipAction block removes from both lists', () => {
+  const following = { ann: { pk: '1', username: 'ann' } };
+  const followers = { ann: { pk: '1', username: 'ann' } };
+  const r = applyFriendshipAction('block', following, followers, {}, { pk: '1' }, 4000);
+  assert.ok(r);
+  assert.equal(r.followingCount, 0);
+  assert.equal(r.followersCount, 0);
 });

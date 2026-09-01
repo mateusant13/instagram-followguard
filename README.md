@@ -49,7 +49,12 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 2. Toque no **botão no seu perfil** ou no **ícone da extensão** para abrir o painel.
 3. A sincronização **começa automaticamente** na instalação e ao abrir o painel. Depois de cada sync completa, você ganha **1 atualização manual grátis**; as seguintes respeitam um intervalo dinâmico (contas maiores = espera maior).
 4. **Não feche a aba do Instagram** enquanto aparecer “sincronizando…”. Pode deixar em segundo plano.
-5. Se você **deixar de seguir** alguém no Instagram, o FollowGuard **atualiza na hora** — a pessoa some das listas sem precisar sincronizar de novo.
+5. Ações no Instagram **atualizam na hora** (sem precisar sincronizar de novo):
+   - **Deixar de seguir** → some de “Não seguem” / “Mútuos”
+   - **Seguir** alguém → entra na lista de seguindo
+   - **Remover seguidor** → some de “Te seguem”
+   - **Aprovar pedido** (conta privada) → aparece em “Novos”
+   - **Bloquear** → some das duas listas
 
 **Quanto tempo demora?** Depende do tamanho das suas listas. O app busca de **24 em 24** contas, com **pausas variadas** entre cada página (nunca um tempo fixo — pode ser ~1,5 s, ~2,2 s ou ~2,25 s, como alguém rolando a lista no celular). Exemplos aproximados:
 

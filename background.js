@@ -5,7 +5,7 @@
 'use strict';
 
 import { readSession, fetchAllUsers, IgApiError, buildResume, apiFetch, transientRetry, jitteredPauseMs, __setTransport } from './ig_api.mjs';
-import { diffAndRecord, mergeEvents, detectNewFollowers, applyManualUnfollow } from './diff.mjs';
+import { diffAndRecord, mergeEvents, detectNewFollowers, applyManualUnfollow, applyFriendshipAction } from './diff.mjs';
 
 const K = {
   settings: 'igf.settings',
@@ -838,17 +838,36 @@ chrome.runtime.onStartup.addListener(async () => {
 });
 
 
-async function recordManualUnfollow({ pk, username } = {}) {
-  const stored = await chrome.storage.local.get([K.following, K.followers, K.state]);
-  const patch = recordManualUnfollowMaps(stored[K.following] || {}, stored[K.followers] || {}, { pk, username });
-  if (!patch) return { ok: false, skipped: 'unknown' };
-  await chrome.storage.local.set({ [K.following]: patch.followingObj });
+async function recordFriendshipAction({ action, pk, username } = {}) {
+  const act = String(action || '').trim();
+  if (!act || !pk) return { ok: false, skipped: 'invalid' };
+  const stored = await chrome.storage.local.get([
+    K.following, K.followers, K.history, K.events, K.newFollowers, K.state,
+  ]);
+  const result = applyFriendshipAction(
+    act,
+    stored[K.following] || {},
+    stored[K.followers] || {},
+    stored[K.history] || {},
+    { pk, username },
+  );
+  if (!result) return { ok: false, skipped: 'unknown' };
+  const persist = {
+    [K.following]: result.followingObj,
+    [K.followers]: result.followersObj,
+  };
+  if (result.historyObj) persist[K.history] = result.historyObj;
+  if (result.newFollowers && result.newFollowers.length) {
+    const storedNew = stored[K.newFollowers] || [];
+    persist[K.newFollowers] = mergeEvents(result.newFollowers, storedNew, EVENTS_MAX);
+  }
+  await chrome.storage.local.set(persist);
   await setState({
-    followingCount: patch.followingCount,
-    followersCount: patch.followersCount,
-    notFollowingBackCount: patch.notFollowingBackCount,
+    followingCount: result.followingCount,
+    followersCount: result.followersCount,
+    notFollowingBackCount: result.notFollowingBackCount,
   });
-  return { ok: true, username: patch.removedUsername };
+  return { ok: true, action: act, username: result.username };
 }
 
 // ---------------------------------------------------------------------------
@@ -940,8 +959,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return true;
   }
+  if (msg.type === 'igf-friendship-action') {
+    recordFriendshipAction({ action: msg.action, pk: msg.pk, username: msg.username }).then(sendResponse);
+    return true;
+  }
   if (msg.type === 'igf-manual-unfollow') {
-    recordManualUnfollow({ pk: msg.pk, username: msg.username }).then(sendResponse);
+    recordFriendshipAction({ action: 'unfollow', pk: msg.pk, username: msg.username }).then(sendResponse);
     return true;
   }
   if (msg.type === 'igf-open-profile') {

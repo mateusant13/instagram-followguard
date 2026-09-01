@@ -106,3 +106,172 @@ export function applyManualUnfollow(following, followers, { pk, username } = {})
     notFollowingBackCount: notFollowingBack,
   };
 }
+
+function mapsFromInput(following, followers) {
+  const gMap = following instanceof Map ? following : new Map(Object.entries(following || {}));
+  const fMap = followers instanceof Map ? followers : new Map(Object.entries(followers || {}));
+  return { gMap, fMap };
+}
+
+function recomputeCounts(gMap, fMap) {
+  const notFollowingBackCount = [...gMap.keys()].filter((u) => !fMap.has(u)).length;
+  return { followingCount: gMap.size, followersCount: fMap.size, notFollowingBackCount };
+}
+
+/** Resolve username key from pk using stored maps/history. */
+export function resolveUsernameByPk(following, followers, history, { pk, username } = {}) {
+  const pkStr = pk != null ? String(pk) : '';
+  if (!pkStr) return username || null;
+  if (username) return username;
+  const { gMap, fMap } = mapsFromInput(following, followers);
+  for (const [u, meta] of gMap) {
+    if (meta && String(meta.pk) === pkStr) return u;
+  }
+  for (const [u, meta] of fMap) {
+    if (meta && String(meta.pk) === pkStr) return u;
+  }
+  const hist = history || {};
+  for (const [u, h] of Object.entries(hist)) {
+    if (h && String(h.pk) === pkStr) return u;
+  }
+  return `id${pkStr}`;
+}
+
+function metaFromStores(gMap, fMap, hist, key, pk) {
+  const existing = gMap.get(key) || fMap.get(key);
+  if (existing) return { ...existing, pk: String(pk), username: key };
+  const h = hist[key] || {};
+  return {
+    pk: String(pk),
+    username: key,
+    full_name: h.fullName || '',
+    profile_pic_url: h.profilePicUrl || '',
+    is_private: false,
+    is_verified: false,
+  };
+}
+
+function findFollowerKeyByPk(fMap, pk, fallbackKey) {
+  const pkStr = String(pk);
+  if (fallbackKey && fMap.has(fallbackKey)) return fallbackKey;
+  for (const [u, meta] of fMap) {
+    if (meta && String(meta.pk) === pkStr) return u;
+  }
+  return null;
+}
+
+function findFollowingKeyByPk(gMap, pk, fallbackKey) {
+  const pkStr = String(pk);
+  if (fallbackKey && gMap.has(fallbackKey)) return fallbackKey;
+  for (const [u, meta] of gMap) {
+    if (meta && String(meta.pk) === pkStr) return u;
+  }
+  return null;
+}
+
+/**
+ * Apply a live friendship action detected on instagram.com.
+ * Supported: unfollow, follow, remove_follower, approve, block.
+ */
+export function applyFriendshipAction(action, following, followers, history, { pk, username } = {}, now = Date.now()) {
+  const { gMap, fMap } = mapsFromInput(following, followers);
+  const hist = { ...(history || {}) };
+  const key = resolveUsernameByPk(gMap, fMap, hist, { pk, username });
+
+  switch (action) {
+    case 'unfollow': {
+      const r = applyManualUnfollow(gMap, fMap, { pk, username: key });
+      if (!r) return null;
+      return {
+        followingObj: Object.fromEntries(r.following),
+        followersObj: Object.fromEntries(fMap),
+        historyObj: hist,
+        username: r.removedUsername,
+        ...recomputeCounts(r.following, fMap),
+      };
+    }
+    case 'follow': {
+      const gKey = findFollowingKeyByPk(gMap, pk, key);
+      if (gKey) return null;
+      const meta = metaFromStores(gMap, fMap, hist, key, pk);
+      gMap.set(key, meta);
+      const h = hist[key] || {};
+      hist[key] = {
+        ...h,
+        pk: String(pk),
+        fullName: meta.full_name || h.fullName || '',
+        profilePicUrl: meta.profile_pic_url || h.profilePicUrl || '',
+        firstFollowedAt: h.firstFollowedAt || now,
+        lastFollowedAt: now,
+        unfollowedAt: null,
+        unfollowCount: h.unfollowCount || 0,
+      };
+      return {
+        followingObj: Object.fromEntries(gMap),
+        followersObj: Object.fromEntries(fMap),
+        historyObj: hist,
+        username: key,
+        ...recomputeCounts(gMap, fMap),
+      };
+    }
+    case 'remove_follower': {
+      const fKey = findFollowerKeyByPk(fMap, pk, key);
+      if (!fKey) return null;
+      fMap.delete(fKey);
+      return {
+        followingObj: Object.fromEntries(gMap),
+        followersObj: Object.fromEntries(fMap),
+        historyObj: hist,
+        username: fKey,
+        ...recomputeCounts(gMap, fMap),
+      };
+    }
+    case 'approve': {
+      const fKey = findFollowerKeyByPk(fMap, pk, key);
+      if (fKey) return null;
+      const meta = metaFromStores(gMap, fMap, hist, key, pk);
+      fMap.set(key, meta);
+      const h = hist[key] || {};
+      hist[key] = {
+        ...h,
+        pk: String(pk),
+        fullName: meta.full_name || h.fullName || '',
+        profilePicUrl: meta.profile_pic_url || h.profilePicUrl || '',
+        firstFollowedAt: h.firstFollowedAt || now,
+        lastFollowedAt: now,
+        unfollowedAt: null,
+        unfollowCount: h.unfollowCount || 0,
+      };
+      return {
+        followingObj: Object.fromEntries(gMap),
+        followersObj: Object.fromEntries(fMap),
+        historyObj: hist,
+        username: key,
+        newFollowers: [{
+          username: key,
+          pk: String(pk),
+          fullName: meta.full_name || '',
+          profilePicUrl: meta.profile_pic_url || '',
+          detectedAt: now,
+        }],
+        ...recomputeCounts(gMap, fMap),
+      };
+    }
+    case 'block': {
+      const fKey = findFollowerKeyByPk(fMap, pk, key);
+      const gKey = findFollowingKeyByPk(gMap, pk, key);
+      if (!fKey && !gKey) return null;
+      if (fKey) fMap.delete(fKey);
+      if (gKey) gMap.delete(gKey);
+      return {
+        followingObj: Object.fromEntries(gMap),
+        followersObj: Object.fromEntries(fMap),
+        historyObj: hist,
+        username: gKey || fKey || key,
+        ...recomputeCounts(gMap, fMap),
+      };
+    }
+    default:
+      return null;
+  }
+}
