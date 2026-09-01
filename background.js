@@ -455,7 +455,8 @@ async function sync(trigger) {
     } catch (err) {
       const msg = err instanceof IgApiError ? err.message : String(err && err.message || err).slice(0, 200);
       const code = err instanceof IgApiError ? err.code : null;
-      await setState({ status: 'error', error: msg, syncProgress: null, errorCode: code });
+      const incomplete = code === 'limit';
+      await setState({ status: 'error', error: msg, syncProgress: null, errorCode: code, incomplete });
       scheduleErrorRetry(code); // transient only — login/checkpoint/gate never auto-retry
       return { ok: false, error: msg };
     } finally {

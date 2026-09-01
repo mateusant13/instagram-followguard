@@ -36,6 +36,7 @@ let tab = TABS.nonFollowers;
 let query = '';
 let shown = 0;
 let live = [];
+let lastOwnKey = '';
 
 
 function esc(s) {
@@ -84,10 +85,26 @@ function placeholder(u) {
 // anyway when the document (popup/panel iframe) is destroyed.
 const PIC_CACHE_MAX = 512;
 const picCache = new Map(); // url -> Promise<blobUrl>
+function isAllowedPicUrl(raw) {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:') return false;
+    const h = u.hostname.toLowerCase();
+    return h === 'instagram.com' || h.endsWith('.instagram.com')
+      || h.endsWith('.cdninstagram.com') || h.endsWith('.fbcdn.net');
+  } catch {
+    return false;
+  }
+}
 function hydrateAvatars(root) {
   for (const img of root.querySelectorAll('img.avatar[data-pic]')) {
     const url = img.dataset.pic;
     img.removeAttribute('data-pic');
+    if (!isAllowedPicUrl(url)) {
+      const item = img.closest('.item');
+      img.outerHTML = placeholder(item && item.dataset ? { username: item.dataset.u } : {});
+      continue;
+    }
     let p = picCache.get(url);
     if (!p) {
       p = fetch(url, { referrer: 'https://www.instagram.com/', credentials: 'omit' })
@@ -171,7 +188,10 @@ function renderHeader() {
       }
       break;
     case 'ok': pill.classList.add('ok'); t.textContent = 'atualizado'; break;
-    case 'error': pill.classList.add('err'); t.textContent = 'erro'; break;
+    case 'error':
+      pill.classList.add('err');
+      t.textContent = state.incomplete ? 'incompleto' : 'erro';
+      break;
     case 'idle': t.textContent = 'aguardando'; break;
     default: t.textContent = state.status;
   }
@@ -348,7 +368,18 @@ if (closeBtn) closeBtn.addEventListener('click', () => parent.postMessage({ type
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes['igf.state']) state = changes['igf.state'].newValue || { status: 'idle' };
+  if (changes['igf.state']) {
+    const newState = changes['igf.state'].newValue || { status: 'idle' };
+    const ownKey = `${newState.ownUserId || ''}:${newState.ownUsername || ''}`;
+    if (lastOwnKey && ownKey !== lastOwnKey) {
+      shown = 0;
+      query = '';
+      const search = el.search();
+      if (search) search.value = '';
+    }
+    lastOwnKey = ownKey;
+    state = newState;
+  }
   if (changes['igf.settings']) settings = changes['igf.settings'].newValue || {};
   if (changes['igf.followers']) followers = changes['igf.followers'].newValue || {};
   if (changes['igf.following']) following = changes['igf.following'].newValue || {};

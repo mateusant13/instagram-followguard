@@ -84,9 +84,13 @@ export async function readSession() {
   if (!sessionid) {
     throw new IgApiError('not-logged-in', 'Nenhuma sessão do Instagram encontrada. Abra instagram.com logado e tente de novo.');
   }
+  const uid = get('ds_user_id');
+  if (!uid) {
+    throw new IgApiError('not-logged-in', 'Não encontrei seu ID de usuário. Abra instagram.com logado.');
+  }
   return {
     sessionid,
-    uid: get('ds_user_id'),
+    uid,
     csrftoken: get('csrftoken'),
     cookieHeader: all
       .filter((c) => c.domain.includes('instagram.com') || c.domain === '.instagram.com')
@@ -298,6 +302,8 @@ export async function fetchAllUsers(kind, uid, session, { signal, onProgress, re
   let seq = 0; // monotonic across runs — a restarted counter would clobber old checkpoints
   let retries = 0;
   let completed = false;
+  let page = 0;
+  const seenCursors = new Set();
   const pick = (u) => ({
     pk: String(u.pk || ''),
     username: u.username,
@@ -313,8 +319,9 @@ export async function fetchAllUsers(kind, uid, session, { signal, onProgress, re
       out.set(u.username, pick(u));
     }
     maxId = resume.maxId;
+    seenCursors.add(String(maxId));
   }
-  for (let page = 0; page < MAX_PAGES; page += 1) {
+  while (page < MAX_PAGES) {
     try {
       const { users, nextMaxId, usersPresent } = await fetchPage(kind, uid, maxId, session, signal);
       // Malformed response (no users array at all) would silently TRUNCATE
@@ -354,7 +361,16 @@ export async function fetchAllUsers(kind, uid, session, { signal, onProgress, re
         completed = true;
         break;
       }
+      const nextKey = String(nextMaxId);
+      if (seenCursors.has(nextKey)) {
+        throw new IgApiError(
+          'limit',
+          'O Instagram repetiu o cursor de paginação — a sincronização parou (o progresso foi guardado; tente de novo).',
+        );
+      }
+      seenCursors.add(nextKey);
       maxId = nextMaxId;
+      page += 1;
       await sleep(humanPauseMs());
     } catch (err) {
       if (signal && signal.aborted) throw err;

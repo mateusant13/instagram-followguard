@@ -167,20 +167,14 @@
     }
   };
 
+  const extOrigin = `chrome-extension://${chrome.runtime.id}`;
   window.addEventListener('message', (ev) => {
+    if (ev.origin !== extOrigin) return;
     if (!ev.data || !host || !panel) return;
-    if (ev.data.type === 'igf-close-panel') {
-      panel.style.display = 'none';
-    } else if (ev.data.type === 'igf-panel-ready' && !panelReady) {
+    if (ev.data.type === 'igf-close-panel') hidePanel();
+    if (ev.data.type === 'igf-panel-ready') {
       panelReady = true;
-      try {
-        const fab = host.shadowRoot && host.shadowRoot.querySelector('button');
-        if (fab) {
-          const label = `${fab.title} · painel OK`;
-          fab.title = label;
-          fab.setAttribute('aria-label', label);
-        }
-      } catch { /* best-effort */ }
+      applyPanelState();
     }
   });
 

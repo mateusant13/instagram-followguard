@@ -61,7 +61,6 @@
     {
       "resources": [
         "panel.html",
-        "panel.css",
         "dashboard.css",
         "dashboard.js",
         "images/*"
