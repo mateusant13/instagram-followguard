@@ -703,6 +703,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
 chrome.runtime.onStartup.addListener(async () => {
   await scheduleAlarm();
+  const meta = (await chrome.storage.local.get(PART_META))[PART_META];
+  const hasPartials = !!(meta && meta.keys && meta.keys.length);
+  if (hasPartials) {
+    await resumeInterruptedSync();
+    return;
+  }
   const s = await getSettings();
   if (s.autoSync && s.consentAt) sync('startup');
 });
@@ -815,11 +821,15 @@ chrome.notifications.onClicked.addListener((id) => {
 // Initial alarm (SW may restart without onInstalled).
 scheduleAlarm().catch(() => {});
 
-// A SW restart mid-sync would leave status='syncing' forever (the UI shows an
-// endless spinner). On every SW start, clear any stale syncing state — a live
-// sync can't coexist with a restart, so this is always safe.
+// SW restart: resume checkpoints when possible; otherwise clear stale spinner.
 (async () => {
   try {
+    const meta = (await chrome.storage.local.get(PART_META))[PART_META];
+    const hasPartials = !!(meta && meta.keys && meta.keys.length);
+    if (hasPartials) {
+      await resumeInterruptedSync();
+      return;
+    }
     const st = await getState();
     if (st.status === 'syncing') {
       await setState({ status: 'idle', syncProgress: null });
