@@ -382,6 +382,38 @@ async function copyList() {
   }
 }
 
+async function exportBackupFile() {
+  const res = await chrome.runtime.sendMessage({ type: 'igf-export-backup' });
+  if (!res || !res.ok || !res.backup) {
+    alert((res && res.error) || 'Não foi possível exportar o backup.');
+    return;
+  }
+  const blob = new Blob([JSON.stringify(res.backup, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `igfollowguard-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function importBackupFile(file) {
+  if (!file) return;
+  let backup;
+  try {
+    backup = JSON.parse(await file.text());
+  } catch {
+    alert('Arquivo inválido — escolha um .json exportado pelo IG FollowGuard.');
+    return;
+  }
+  if (!confirm('Substituir os dados atuais desta instalação pelo backup?')) return;
+  const res = await chrome.runtime.sendMessage({ type: 'igf-import-backup', backup });
+  if (!res || !res.ok) {
+    alert((res && res.error) || 'Falha ao importar backup.');
+    return;
+  }
+  await load();
+}
+
 function renderList() {
   const { nonFollowers, nonFollowersAll, mutual, fans } = computeLists();
   const q = query.trim().toLowerCase();

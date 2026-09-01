@@ -130,6 +130,28 @@ export async function deleteAllData() {
   });
 }
 
+/** Export every igf.* key for backup / reinstall migration. */
+export async function exportBackup() {
+  const all = await chrome.storage.local.get(null);
+  const data = {};
+  for (const [k, v] of Object.entries(all)) {
+    if (k.startsWith('igf.')) data[k] = v;
+  }
+  return { schema: 1, exportedAt: Date.now(), data };
+}
+
+/** Restore igf.* keys from a prior exportBackup() payload. */
+export async function importBackup(raw) {
+  if (!raw || typeof raw !== 'object' || !raw.data || typeof raw.data !== 'object') {
+    throw new Error('Backup inválido — arquivo corrompido ou formato antigo.');
+  }
+  const entries = Object.entries(raw.data).filter(([k]) => k.startsWith('igf.'));
+  if (!entries.length) {
+    throw new Error('Backup vazio — nenhum dado do IG FollowGuard.');
+  }
+  await chrome.storage.local.set(Object.fromEntries(entries));
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -665,6 +687,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       await deleteAllData();
       await scheduleAlarm();
       sendResponse({ ok: true });
+    })();
+    return true;
+  }
+  if (msg.type === 'igf-export-backup') {
+    (async () => {
+      try {
+        const backup = await exportBackup();
+        sendResponse({ ok: true, backup });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err && err.message || err) });
+      }
+    })();
+    return true;
+  }
+  if (msg.type === 'igf-import-backup') {
+    (async () => {
+      try {
+        await importBackup(msg.backup);
+        await scheduleAlarm();
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err && err.message || err) });
+      }
     })();
     return true;
   }

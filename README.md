@@ -12,8 +12,21 @@ Extensão para Chrome que mostra **quem não te segue de volta** no Instagram e 
 1. Baixe este repositório: **Code → Download ZIP** e extraia numa pasta.
 2. No Chrome, abra `chrome://extensions`.
 3. Ative o **Modo do desenvolvedor** (chave no canto superior direito).
-4. Clique em **Carregar sem compactação** e selecione a pasta **`instagram-followguard-main`** (criada ao extrair o ZIP — é a raiz do repositório, onde está o `manifest.json`).
+4. Clique em **Carregar sem compactação** e selecione a pasta extraída (a raiz onde está o `manifest.json`).
 5. Pronto. Abra o Instagram logado: um botão flutuante aparece no topo do seu perfil, e o ícone da extensão na barra do Chrome abre o painel completo.
+
+## Atualizar sem perder dados
+
+Os dados ficam no **Chrome**, ligados à **instalação** da extensão (ID interno). Se você **remover** a extensão antiga e **carregar de novo** outra pasta, a lista some — isso é comportamento do Chrome, não bug da extensão.
+
+**Forma certa de atualizar:**
+
+1. Na instalação antiga, use **Exportar backup** no rodapé do painel (guarde o `.json`).
+2. Substitua os arquivos **na mesma pasta** que já está carregada no Chrome (ou extraia o ZIP por cima).
+3. Em `chrome://extensions`, clique em **Recarregar** na extensão IG FollowGuard (não remova).
+4. Se você precisou instalar de novo do zero, use **Importar backup** no painel.
+
+**Nunca** remova a extensão antes de exportar o backup, se quiser manter o histórico.
 
 ## Como funciona
 

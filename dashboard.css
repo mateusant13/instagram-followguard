@@ -180,3 +180,7 @@ footer {
 }
 a.profile-link { color: var(--muted); font-size: 11px; text-decoration: none; }
 a.profile-link:hover { color: var(--text); }
+
+.backup-row { margin-top: 6px; gap: 6px; flex-wrap: wrap; align-items: center; }
+.import-label { cursor: pointer; display: inline-flex; align-items: center; }
+.backup-hint { font-size: 10px; color: var(--muted); flex: 1 1 100%; line-height: 1.3; }

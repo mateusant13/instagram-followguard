@@ -52,6 +52,13 @@
       </label>
       <label><input type="checkbox" id="notif" /> notificações</label>
     </div>
+    <div class="settings backup-row">
+      <button type="button" id="export-backup" class="btn ghost tiny">Exportar backup</button>
+      <label class="btn ghost tiny import-label">Importar backup
+        <input type="file" id="import-backup" accept=".json,application/json" hidden />
+      </label>
+      <span class="backup-hint">Guarde antes de reinstalar — o Chrome não migra dados entre instalações.</span>
+    </div>
     <div class="settings privacy-row">
       <p class="privacy-note">Ao sincronizar, seus dados de seguidores ficam apenas neste navegador.</p>
       <button type="button" id="delete-data" class="btn ghost danger">Apagar todos os dados</button>
