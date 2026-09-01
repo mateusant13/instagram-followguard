@@ -44,6 +44,18 @@ header .title small { display: block; font-weight: 400; color: var(--muted); fon
 .pill.sync { color: var(--warn); border-color: rgba(251,191,36,.4); }
 .pill.off { color: var(--bad); }
 
+.sync-hint {
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  background: rgba(251, 191, 36, .12);
+  border: 1px solid rgba(251, 191, 36, .35);
+  border-radius: 8px;
+  color: #fde68a;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.sync-hint strong { color: var(--warn); }
+
 /* --- summary cards --- */
 .summary {
   display: grid; grid-template-columns: repeat(3, 1fr);

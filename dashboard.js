@@ -19,6 +19,7 @@ const el = {
   search: () => $('search'),
   list: () => $('list'),
   error: () => $('error'),
+  syncHint: () => $('sync-hint'),
   errText: () => $('err-text'),
   errBtn: () => $('err-btn'),
   meta: () => $('meta'),
@@ -202,6 +203,19 @@ function renderHeader() {
   el.cardM().querySelector('.count').textContent = state.followingCount;
 }
 
+function renderSyncHint() {
+  const hint = el.syncHint();
+  if (!hint) return;
+  if (state.status === 'syncing') {
+    hint.style.display = 'block';
+    hint.innerHTML =
+      '<strong>Não feche a aba do Instagram</strong> enquanto sincroniza. ' +
+      'A aba pode ficar em segundo plano — não precisa estar em foco.';
+  } else {
+    hint.style.display = 'none';
+  }
+}
+
 function renderError() {
   if (state.status === 'error' && state.error) {
     el.error().style.display = 'block';
@@ -269,12 +283,13 @@ function renderMeta() {
 }
 
 function renderSettings() {
-  el.interval().value = String(settings.refreshMinutes || 60);
+  el.interval().value = String(settings.refreshMinutes || 180);
   el.notif().checked = settings.notificationsEnabled !== false;
 }
 
 function render() {
   renderHeader();
+  renderSyncHint();
   renderError();
   renderTabs();
   renderList();

@@ -22,7 +22,7 @@ const SYNC_ALARM = 'igf-sync';
 const DEFAULT_SETTINGS = {
   // No username here: the logged-in profile is resolved at runtime from the
   // session cookie (ds_user_id -> /api/v1/users/{pk}/info/). Never hardcode.
-  refreshMinutes: 60,
+  refreshMinutes: 180,
   notificationsEnabled: true,
   autoSync: true,
   consentAt: null,
@@ -229,6 +229,14 @@ async function waitForProxy(tabId, timeoutMs) {
   return false;
 }
 
+async function pinSyncTab(active) {
+  if (syncTabId == null) return;
+  try {
+    if (active) await chrome.tabs.update(syncTabId, { autoDiscardable: false });
+    await chrome.tabs.sendMessage(syncTabId, { igf: 'sync-hint', active: !!active });
+  } catch { /* tab gone or listener not ready */ }
+}
+
 async function ensureIgTab() {
   // Prefer an existing IG tab whose content script ANSWERS — a pre-reload
   // tab (no listener) is skipped, never navigated.
@@ -236,6 +244,7 @@ async function ensureIgTab() {
   for (const t of tabs) {
     if (await pingProxy(t.id)) {
       syncTabId = t.id;
+      await pinSyncTab(true);
       return;
     }
   }
@@ -245,6 +254,7 @@ async function ensureIgTab() {
     try {
       await chrome.tabs.get(openedTabId);
       syncTabId = openedTabId;
+      await pinSyncTab(true);
       return;
     } catch { openedTabId = null; }
   }
@@ -252,14 +262,17 @@ async function ensureIgTab() {
   openedTabId = t.id;
   syncTabId = t.id;
   await waitForProxy(t.id, 10000);
+  await pinSyncTab(true);
 }
 
 function releaseIgTab() {
-  if (openedTabId != null) {
-    chrome.tabs.remove(openedTabId).catch(() => {});
-    openedTabId = null;
-  }
-  syncTabId = null;
+  pinSyncTab(false).finally(() => {
+    if (openedTabId != null) {
+      chrome.tabs.remove(openedTabId).catch(() => {});
+      openedTabId = null;
+    }
+    syncTabId = null;
+  });
 }
 
 // Runs fn with the page-context transport installed: an IG tab is ensured
@@ -294,8 +307,9 @@ function withPageTransport(fn) {
   return run;
 }
 
-async function pageTransport(path, _session, _signal) {
+async function pageTransport(path, _session, signal) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (signal && signal.aborted) throw new IgApiError('aborted', 'Sincronização interrompida.');
     if (syncTabId == null) await ensureIgTab();
     try {
       const r = await chrome.tabs.sendMessage(syncTabId, { igf: 'fetch', path });
@@ -374,23 +388,26 @@ async function sync(trigger) {
       if (uid) await setState({ ownUserId: String(uid) });
       if (username) await setState({ ownUsername: username });
 
-      // Both lists in PARALLEL (a sequential full-following-then-full-followers
-      // walk doubles the wall time on large accounts). Progress is persisted
-      // per page so the dashboard can show live counts; each page is also
-      // checkpointed so a failure/restart resumes instead of restarting.
+      // Lists run SEQUENTIALLY — parallel walks roughly double request pressure
+      // on Instagram and are easier to flag as automation. Progress is persisted
+      // per page; each page is checkpointed so a failure/restart resumes.
       const partials = await readPartials(uid);
-      const [following, followers] = await Promise.all([
-        fetchAllUsers('following', uid, session, {
-          resume: partials.following,
-          onProgress: ({ kind, fetched }) => setState({ syncProgress: { phase: kind, fetched } }),
-          onPart: ({ seq, maxId, users }) => savePagePart('following', uid, seq, maxId, users),
-        }),
-        fetchAllUsers('followers', uid, session, {
-          resume: partials.followers,
-          onProgress: ({ kind, fetched }) => setState({ syncProgress: { phase: kind, fetched } }),
-          onPart: ({ seq, maxId, users }) => savePagePart('followers', uid, seq, maxId, users),
-        }),
-      ]);
+      const listAbort = new AbortController();
+      const listOpts = (kind, resume) => ({
+        signal: listAbort.signal,
+        resume,
+        onProgress: ({ kind: k, fetched }) => setState({ syncProgress: { phase: k, fetched } }),
+        onPart: ({ seq, maxId, users }) => savePagePart(kind, uid, seq, maxId, users),
+      });
+      let following;
+      let followers;
+      try {
+        following = await fetchAllUsers('following', uid, session, listOpts('following', partials.following));
+        followers = await fetchAllUsers('followers', uid, session, listOpts('followers', partials.followers));
+      } catch (err) {
+        listAbort.abort();
+        throw err;
+      }
 
       const stored = await chrome.storage.local.get([K.prevFollowers, K.history, K.snapshotUid]);
       const snapshot = processSyncSnapshot({

@@ -14,6 +14,29 @@
   let panel = null;
   let panelReady = false;
   let lastPath = null;
+  let syncBanner = null;
+
+  const showSyncBanner = () => {
+    if (!syncBanner) {
+      syncBanner = document.createElement('div');
+      syncBanner.id = 'igf-sync-banner';
+      syncBanner.setAttribute('role', 'status');
+      syncBanner.style.cssText =
+        'position:fixed;top:0;left:0;right:0;z-index:2147483646;padding:10px 14px;' +
+        'background:linear-gradient(90deg,#78350f,#92400e);color:#fef3c7;' +
+        'font:600 12px/1.45 system-ui,sans-serif;text-align:center;' +
+        'box-shadow:0 2px 12px rgba(0,0,0,.45);pointer-events:none;';
+      syncBanner.innerHTML =
+        '<strong style="color:#fde68a">Não feche esta aba do Instagram</strong> — ' +
+        'o FollowGuard está sincronizando. Pode ficar em segundo plano.';
+      (document.body || document.documentElement).appendChild(syncBanner);
+    }
+    syncBanner.style.display = 'block';
+  };
+
+  const hideSyncBanner = () => {
+    if (syncBanner) syncBanner.style.display = 'none';
+  };
 
   const isOwnProfilePath = (pathname) => {
     if (!own || !own.username) return false;
@@ -171,11 +194,14 @@
   window.addEventListener('message', (ev) => {
     if (ev.origin !== extOrigin) return;
     if (!ev.data || !host || !panel) return;
-    if (ev.data.type === 'igf-close-panel') hidePanel();
-    if (ev.data.type === 'igf-panel-ready') {
-      panelReady = true;
-      applyPanelState();
-    }
+    if (ev.data.type === 'igf-close-panel' && panel) panel.style.display = 'none';
+    if (ev.data.type === 'igf-panel-ready') panelReady = true;
+  });
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.igf !== 'sync-hint') return;
+    if (msg.active) showSyncBanner();
+    else hideSyncBanner();
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
