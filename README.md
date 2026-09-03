@@ -70,7 +70,7 @@ Depende de **quantas pessoas** você segue e **quantos te seguem**. Quanto maior
 
 **Por que não é na hora?** Porque o Instagram não gosta de ferramenta que puxa milhares de nomes em segundos. O FollowGuard vai **devagar de propósito** — igual você rolando a lista no celular. Isso **protege sua conta** (menos chance de bloqueio, verificação ou “aguarde um momento”).
 
-**É seguro?** Não pede senha. Seus dados **ficam só no seu navegador**. Ninguém da nossa equipe vê sua lista.
+**É seguro?** Não pede senha. Tudo fica **no seu navegador** — eu não recebo sua lista, não tem upload pra lugar nenhum.
 
 **Apareceu erro ou “aguarde”?** Em conta grande isso acontece. O app **tenta de novo sozinho** — não precisa ficar clicando em sincronizar.
 
@@ -85,7 +85,7 @@ Depende de **quantas pessoas** você segue e **quantos te seguem**. Quanto maior
 3. Na **barra de URL**, abra a página de extensões do seu navegador (tabela acima) e clique em **Recarregar** no IG FollowGuard.
 
 Se já removeu e instalou de novo: **Importar backup** no painel.
-
+**Não apague a extensão** se quiser manter suas listas — **remover apaga tudo** do navegador.
 ---
 
 ## O que o painel mostra
@@ -101,7 +101,7 @@ Se já removeu e instalou de novo: **Importar backup** no painel.
 ## Privacidade e segurança
 
 - Usa a sessão em que você **já está logado** no Instagram — **não pede senha**.
-- **Nada é enviado** para servidores nossos: listas e histórico ficam **só no seu navegador**.
+- **Nada sai do seu PC**: listas e histórico ficam **só no navegador** onde você instalou.
 - A extensão não lê mensagens nem DMs — só quem você segue / quem te segue.
 - Você pode **Apagar todos os dados** no rodapé do painel quando quiser.
 
