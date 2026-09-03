@@ -55,18 +55,46 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
    - **Aprovar pedido** (conta privada) → aparece em “Novos”
    - **Bloquear** → some das duas listas
 
-**Quanto tempo demora?** Depende do tamanho das suas listas. O app busca de **24 em 24** contas, com **pausas variadas** entre cada página (nunca um tempo fixo — pode ser ~1,5 s, ~2,2 s ou ~2,25 s, como alguém rolando a lista no celular). Exemplos aproximados:
+## Quanto tempo demora — e por que é assim
 
-| Seguidores + seguindo (total de páginas) | Tempo só de pausas |
-|----------------------------------------|-------------------|
-| ~100 contas (~9 páginas) | ~20–40 segundos |
-| ~500 contas (~42 páginas) | ~2–3 minutos |
-| ~1000 contas (~84 páginas) | ~4–6 minutos |
-| ~20 mil seguidores (~834 páginas) | ~30–50 minutos (continua sozinha) |
+A sincronização **não é instantânea de propósito**. O FollowGuard busca suas listas **24 contas por vez**, com **pausas variadas** entre cada página (como alguém rolando a lista no celular — às vezes ~1,5 s, às vezes ~2 s, às vezes mais). Isso **demora mais** do que baixar tudo de uma vez, mas é **o jeito certo** de usar o Instagram sem parecer robô.
 
-**Contas muito grandes (ex.: 20 mil seguidores):** funciona, mas demora. A sincronização **começa e termina sozinha** — a cada **12 mil contas** por lista ela faz uma pausa (também variada, ~1,5 min, nunca sempre o mesmo número de segundos) e continua de onde parou, sem precisar clicar em nada. Mantenha a aba do Instagram aberta o tempo todo.
+### Por que demora?
 
-**Pacing não elimina rate limit:** o app já rola devagar (24 contas por vez, pausas irregulares entre páginas), mas o Instagram ainda pode pedir para “aguardar” em contas enormes. Isso é limite da plataforma, não bug — a extensão tenta de novo sozinha depois.
+Cada página da lista é uma requisição à API do Instagram. Contas com milhares de seguidores têm **centenas de páginas**. Some o tempo de rede + as pausas entre páginas: o total cresce rápido.
+
+| Tamanho aproximado | Páginas (24 contas cada) | Tempo estimado (só pausas + rede) |
+|--------------------|-------------------------|-----------------------------------|
+| ~100 contas | ~9 | ~1–2 minutos |
+| ~500 contas | ~42 | ~3–5 minutos |
+| ~1.000 contas | ~84 | ~5–10 minutos |
+| ~5.000 contas | ~420 | ~20–40 minutos |
+| ~20.000 seguidores | ~834 só na lista de seguidores | **1 h ou mais** (seguidores + seguindo) |
+
+Os números são **aproximados** — variam com sua conexão e com o Instagram.
+
+### Contas muito grandes (milhares de seguidores)
+
+Funciona, mas **leva tempo**. Você não precisa ficar clicando em nada: a sync **começa e termina sozinha**.
+
+Depois de buscar **até 12 mil contas** numa mesma lista (500 páginas × 24), o app faz uma **pausa longa** (~1,5 min, com variação) e **continua de onde parou**. Essa pausa **não é** o tempo de sincronizar 12 mil pessoas — é só um **intervalo de descanso** entre blocos, para não sobrecarregar a plataforma. Sincronizar 12 mil contas, só nas pausas entre páginas, leva **dezenas de minutos**.
+
+**Mantenha uma aba do Instagram aberta** enquanto sincroniza (pode ficar em segundo plano).
+
+### Por que deve demorar — e por que isso é seguro
+
+Ferramentas que “puxam” milhares de seguidores em segundos costumam **disparar alertas** no Instagram (bloqueio, verificação, limite temporário). O FollowGuard foi feito para o oposto:
+
+- **Pausas irregulares** — nunca o mesmo intervalo duas vezes seguidas  
+- **Uma lista por vez** — seguindo, depois seguidores (não tudo em paralelo)  
+- **Requisições pela sua aba logada** — mesma origem e sessão que você já usa no site  
+- **Dados só no seu navegador** — nada vai para servidor nosso  
+
+Demorar **é a proteção**, não um defeito. Você troca velocidade por **menor chance de restrição na conta**.
+
+### Se aparecer “aguarde” ou erro de limite
+
+Em contas enormes o Instagram às vezes pede para esperar — **limite da plataforma**, não bug do app. O FollowGuard **tenta de novo sozinho** (com intervalos cada vez maiores: 5 min, 15 min, 45 min…). Deixe a aba aberta e aguarde.
 
 ---
 
