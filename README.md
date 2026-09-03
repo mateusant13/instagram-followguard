@@ -76,9 +76,10 @@ Depende de **quantas pessoas** você segue e **quantos te seguem**. Quanto maior
 
 ---
 
+**Não apague a extensão** se quiser manter suas listas — **remover apaga tudo** do navegador.
+
 ## Atualizar para versão nova
 
-**Não apague a extensão** se quiser manter suas listas — **remover apaga tudo** do Chrome.
 
 1. No painel, embaixo: **Exportar backup** → guarde o arquivo `.json`.
 2. Baixe o ZIP novo, extraia e **substitua os arquivos na mesma pasta** de antes (a que o navegador já usa).
