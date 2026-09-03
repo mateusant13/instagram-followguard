@@ -35,7 +35,7 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
 6. **Use**  
    Abra **instagram.com**, entre com sua conta e vá ao **seu perfil** — o botão do IG FollowGuard aparece ao lado da engrenagem.  
    Também dá para abrir pelo **ícone da extensão** na barra do navegador.  
-   A sincronização **começa sozinha** — mantenha **uma aba do Instagram aberta** (pode ficar em segundo plano). Quando terminar, o painel mostra **atualizado**.
+   Abra o painel e toque em **↻** para sincronizar (com **instagram.com** aberto em alguma aba). Quando terminar, o painel mostra **atualizado**.
 
 7. **Sobre a pasta no PC**  
    Pode **apagar o `.zip`** depois de extrair.  

@@ -391,10 +391,8 @@ async function ensureIgTab() {
 function releaseIgTab() {
   const tab = syncTabId;
   pinSyncTab(false).finally(() => {
-    if (openedTabId != null) {
-      chrome.tabs.remove(openedTabId).catch(() => {});
-      openedTabId = null;
-    }
+    // Never close tabs — user may be browsing; only drop our borrow state.
+    openedTabId = null;
     if (pinnedForeignTabId === tab) pinnedForeignTabId = null;
     syncTabId = null;
   });
@@ -821,7 +819,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'install') {
     const s = await getSettings();
     if (!s.consentAt) await saveSettings({ ...s, consentAt: Date.now() });
-    sync('install');
+    // Do not open instagram.com or start sync on install — user opens IG when ready.
   }
 });
 
@@ -834,7 +832,12 @@ chrome.runtime.onStartup.addListener(async () => {
     return;
   }
   const s = await getSettings();
-  if (s.autoSync && s.consentAt) sync('startup');
+  if (s.autoSync && s.consentAt) {
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://www.instagram.com/*' });
+      if (tabs.length) sync('startup');
+    } catch { /* skip */ }
+  }
 });
 
 

@@ -166,7 +166,7 @@ function itemHtml(u) {
     <div class="item" data-u="${user}">
       ${avatarImg(u)}
       <div class="who">
-        <b><a href="https://www.instagram.com/${encodeURIComponent(u.username)}/" target="_blank" rel="noopener">${user}</a></b>
+        <b><a href="#" class="profile-open" data-profile="${user}">${user}</a></b>
         <span title="${full}">${full}</span>
       </div>
       ${tags.join('')}
@@ -182,7 +182,7 @@ function eventHtml(e) {
     <div class="item" data-u="${user}">
       ${avatarImg({ username: e.username, profile_pic_url: e.profilePicUrl })}
       <div class="who">
-        <b><a href="https://www.instagram.com/${encodeURIComponent(e.username)}/" target="_blank" rel="noopener">${user}</a></b>
+        <b><a href="#" class="profile-open" data-profile="${user}">${user}</a></b>
         <span title="${full}">${full}</span>
       </div>
       ${tags.join('')}
@@ -195,6 +195,7 @@ function invalidateListCaches() {
   poolCache = null;
   poolCacheSig = '';
   listRenderedCount = 0;
+  resetListObserver();
 }
 
 function computeLists() {
@@ -425,6 +426,13 @@ function buildPool() {
 }
 
 function wireListItems(root) {
+  root.querySelectorAll('a.profile-open').forEach((a) => {
+    a.onclick = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openProfile(a.dataset.profile);
+    };
+  });
   root.querySelectorAll('.item').forEach((it) => {
     it.onclick = (ev) => {
       if (ev.target.closest('a, button')) return;
@@ -433,24 +441,35 @@ function wireListItems(root) {
   });
 }
 
-function ensureListObserver() {
-  if (listObserver) return;
+function resetListObserver() {
+  if (listObserver) {
+    listObserver.disconnect();
+    listObserver = null;
+  }
+}
+
+function ensureListObserver(listEl) {
+  resetListObserver();
   listObserver = new IntersectionObserver((entries) => {
     for (const e of entries) {
-      if (e.isIntersecting) { shown += PAGE; renderList(); break; }
+      if (e.isIntersecting) {
+        shown += PAGE;
+        renderList();
+        break;
+      }
     }
-  }, { root: null, rootMargin: '160px' });
+  }, { root: listEl, rootMargin: '120px', threshold: 0 });
 }
 
 function renderList() {
   const pool = buildPool();
-  const target = shown === 0 ? INITIAL_VISIBLE : shown + PAGE;
+  const target = shown === 0 ? INITIAL_VISIBLE : shown;
   const slice = pool.slice(0, target);
   const listEl = el.list();
   if (slice.length === 0) {
     listEl.innerHTML = '<div class="empty">Nada aqui' + (query ? ' para essa busca' : '') + '.</div>';
     listRenderedCount = 0;
-    if (listObserver) { listObserver.disconnect(); listObserver = null; }
+    resetListObserver();
     return;
   }
   const htmlFn = (tab === TABS.events || tab === TABS.newFollowers) ? eventHtml : itemHtml;
@@ -476,13 +495,13 @@ function renderList() {
     wireListItems(listEl);
     hydrateAvatars(listEl);
   }
+  shown = slice.length;
   if (hasMore) {
-    ensureListObserver();
+    ensureListObserver(listEl);
     const sentinel = listEl.querySelector('.sentinel');
     if (sentinel) listObserver.observe(sentinel);
-  } else if (listObserver) {
-    listObserver.disconnect();
-    listObserver = null;
+  } else {
+    resetListObserver();
   }
 }
 
@@ -631,7 +650,7 @@ el.notif().addEventListener('change', async (e) => {
     settings: { notificationsEnabled: e.target.checked },
   });
 });
-el.openIg().onclick = openInstagram;
+el.openIg().addEventListener('click', (e) => { e.preventDefault(); openInstagram(); });
 
 // CSP-safe avatar fallback: a failed <img> becomes the letter placeholder.
 // (Inline onerror= handlers are blocked by the extension CSP.)
