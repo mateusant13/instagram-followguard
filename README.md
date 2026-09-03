@@ -55,46 +55,24 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
    - **Aprovar pedido** (conta privada) → aparece em “Novos”
    - **Bloquear** → some das duas listas
 
-## Quanto tempo demora — e por que é assim
+## Quanto tempo demora?
 
-A sincronização **não é instantânea de propósito**. O FollowGuard busca suas listas **24 contas por vez**, com **pausas variadas** entre cada página (como alguém rolando a lista no celular — às vezes ~1,5 s, às vezes ~2 s, às vezes mais). Isso **demora mais** do que baixar tudo de uma vez, mas é **o jeito certo** de usar o Instagram sem parecer robô.
+Depende de **quantas pessoas** você segue e **quantos te seguem**. Quanto maior a conta, mais demora — é normal.
 
-### Por que demora?
+| Sua conta (mais ou menos) | Quanto esperar |
+|---------------------------|----------------|
+| Pequena (até ~500) | Alguns minutos |
+| Média (até ~2 mil) | ~15–30 minutos |
+| Grande (5 mil+) | Pode passar de **1 hora** |
+| Muito grande (20 mil+) | Deixe rodando — **várias horas** não é raro |
 
-Cada página da lista é uma requisição à API do Instagram. Contas com milhares de seguidores têm **centenas de páginas**. Some o tempo de rede + as pausas entre páginas: o total cresce rápido.
+**O que você precisa fazer:** deixar **uma aba do Instagram aberta** (pode minimizar ou usar outra aba). Não precisa ficar olhando — quando acabar, o painel mostra **atualizado**.
 
-| Tamanho aproximado | Páginas (24 contas cada) | Tempo estimado (só pausas + rede) |
-|--------------------|-------------------------|-----------------------------------|
-| ~100 contas | ~9 | ~1–2 minutos |
-| ~500 contas | ~42 | ~3–5 minutos |
-| ~1.000 contas | ~84 | ~5–10 minutos |
-| ~5.000 contas | ~420 | ~20–40 minutos |
-| ~20.000 seguidores | ~834 só na lista de seguidores | **1 h ou mais** (seguidores + seguindo) |
+**Por que não é na hora?** Porque o Instagram não gosta de ferramenta que puxa milhares de nomes em segundos. O FollowGuard vai **devagar de propósito** — igual você rolando a lista no celular. Isso **protege sua conta** (menos chance de bloqueio, verificação ou “aguarde um momento”).
 
-Os números são **aproximados** — variam com sua conexão e com o Instagram.
+**É seguro?** Não pede senha. Seus dados **ficam só no seu navegador**. Ninguém da nossa equipe vê sua lista.
 
-### Contas muito grandes (milhares de seguidores)
-
-Funciona, mas **leva tempo**. Você não precisa ficar clicando em nada: a sync **começa e termina sozinha**.
-
-Depois de buscar **até 12 mil contas** numa mesma lista (500 páginas × 24), o app faz uma **pausa longa** (~1,5 min, com variação) e **continua de onde parou**. Essa pausa **não é** o tempo de sincronizar 12 mil pessoas — é só um **intervalo de descanso** entre blocos, para não sobrecarregar a plataforma. Sincronizar 12 mil contas, só nas pausas entre páginas, leva **dezenas de minutos**.
-
-**Mantenha uma aba do Instagram aberta** enquanto sincroniza (pode ficar em segundo plano).
-
-### Por que deve demorar — e por que isso é seguro
-
-Ferramentas que “puxam” milhares de seguidores em segundos costumam **disparar alertas** no Instagram (bloqueio, verificação, limite temporário). O FollowGuard foi feito para o oposto:
-
-- **Pausas irregulares** — nunca o mesmo intervalo duas vezes seguidas  
-- **Uma lista por vez** — seguindo, depois seguidores (não tudo em paralelo)  
-- **Requisições pela sua aba logada** — mesma origem e sessão que você já usa no site  
-- **Dados só no seu navegador** — nada vai para servidor nosso  
-
-Demorar **é a proteção**, não um defeito. Você troca velocidade por **menor chance de restrição na conta**.
-
-### Se aparecer “aguarde” ou erro de limite
-
-Em contas enormes o Instagram às vezes pede para esperar — **limite da plataforma**, não bug do app. O FollowGuard **tenta de novo sozinho** (com intervalos cada vez maiores: 5 min, 15 min, 45 min…). Deixe a aba aberta e aguarde.
+**Apareceu erro ou “aguarde”?** Em conta grande isso acontece. O app **tenta de novo sozinho** — não precisa ficar clicando em sincronizar.
 
 ---
 
