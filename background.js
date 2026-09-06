@@ -274,11 +274,31 @@ function countNotFollowingBack(followingObj, followersObj) {
   return Object.keys(followingObj || {}).filter((u) => !fKeys.has(u)).length;
 }
 
+/**
+ * Restore the last-known-good lists (and the counter derived from them) after
+ * a follow-list walk failed. Exported as the tested seam for the rollback.
+ */
+export async function restoreListsAfterFailedWalk(prewalk) {
+  const pf = (prewalk && prewalk[K.followers]) || {};
+  const pg = (prewalk && prewalk[K.following]) || {};
+  await chrome.storage.local.set({ [K.followers]: pf, [K.following]: pg });
+  await setState({
+    followingCount: Object.keys(pg).length,
+    followersCount: Object.keys(pf).length,
+    notFollowingBackCount: countNotFollowingBack(pg, pf),
+  });
+  return { followingCount: Object.keys(pg).length, followersCount: Object.keys(pf).length };
+}
+
 function makeListProgressTracker() {
   const counts = { following: 0, followers: 0 };
   let publishChain = Promise.resolve();
   return {
     counts,
+    // Await every queued publish: a rollback after a failed walk must not
+    // race a tracker write still sitting on the chain (it would re-persist
+    // the truncated list right after the restore).
+    flush() { return publishChain; },
     onProgress({ kind: k, fetched, users }) {
       counts[k] = fetched;
       const patch = { [k === 'following' ? K.following : K.followers]: usersToObj(users) };
@@ -615,6 +635,13 @@ async function sync(trigger) {
         onProgress: (payload) => progress.onProgress(payload),
         onPart: ({ seq, maxId, users }) => savePagePart(kind, uid, seq, maxId, users),
       });
+      // The tracker publishes the growing lists under the AUTHORITATIVE
+      // igf.following / igf.followers keys for live progress. If the walk then
+      // fails, those keys are left holding a TRUNCATED list — and the state
+      // counts with it, so the "não seguem de volta" counter keeps showing a
+      // number computed from a partial list until the next completed sync.
+      // Snapshot the last-known-good lists and restore them on failure.
+      const prewalk = await chrome.storage.local.get([K.followers, K.following]);
       let following;
       let followers;
       try {
@@ -622,6 +649,10 @@ async function sync(trigger) {
         followers = await fetchListComplete('followers', uid, session, listOpts, readPartials);
       } catch (err) {
         listAbort.abort();
+        // Drain queued tracker writes FIRST — a publish landing after the
+        // restore would re-persist the truncated list.
+        await progress.flush();
+        await restoreListsAfterFailedWalk(prewalk);
         throw err;
       }
 

@@ -171,6 +171,20 @@ test('fetchAllUsers: fresh run checkpoints from seq 0', async () => {
   assert.deepEqual(parts, [[0, 'm1', 1]]);
 });
 
+test('fetchAllUsers: big_list:false with a live cursor continues (counter truncation bug)', async () => {
+  // IG answers big_list:false as a lazy-render hint while still handing out a
+  // valid next_max_id. The old code treated it as end-of-list, discarded the
+  // cursor and accepted the FIRST page as complete — the "não seguem de volta"
+  // counter was then computed from a handful of accounts and published as
+  // final. A live cursor means more pages, full stop.
+  stubFetchQueue([
+    { status: 'ok', users: [u(1), u(2)], next_max_id: 'm1', big_list: false },
+    { status: 'ok', users: [u(3)], big_list: false },
+  ]);
+  const out = await fetchAllUsers('following', UID, SESSION, {});
+  assert.deepEqual([...out.keys()], ['user1', 'user2', 'user3']);
+});
+
 // --- fetchAllUsers: timeout / network / gate classification ---
 
 function stubFetchHang() {

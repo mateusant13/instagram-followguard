@@ -286,7 +286,13 @@ async function fetchPage(kind, uid, maxId, session, signal) {
   const usersPresent = Array.isArray(body.users);
   const users = usersPresent ? body.users : [];
   const next = body.next_max_id;
-  const hasMore = !!(next && body.big_list !== false);
+  // Cursor-authoritative: a valid next_max_id means MORE pages, full stop.
+  // big_list is IG's "render this big list lazily" hint, NOT an end-of-list
+  // signal — honouring it discarded a live cursor mid-walk and accepted the
+  // first page as the complete list, so the "não seguem de volta" counter was
+  // computed from ~PAGE_SIZE accounts and published as final. The walk ends
+  // when IG stops answering with a cursor; MAX_PAGES still bounds it.
+  const hasMore = !!next;
   return { users, nextMaxId: hasMore ? next : null, usersPresent };
 }
 
