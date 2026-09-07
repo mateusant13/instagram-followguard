@@ -96,11 +96,18 @@ test('applyManualUnfollow removes by pk and recomputes not-following-back', () =
   assert.equal(r.notFollowingBackCount, 1);
 });
 
-test('applyFriendshipAction follow adds to following', () => {
+test('applyFriendshipAction follow with unknown pk (synthetic key) is skipped', () => {
+  // pk 9 is in no store: the resolved key would be the synthetic `id9`,
+  // creating a phantom row the dashboard can never reconcile. Must be null.
   const r = applyFriendshipAction('follow', {}, { c: { pk: '3', username: 'c' } }, {}, { pk: '9' }, 1000);
+  assert.equal(r, null);
+});
+
+test('applyFriendshipAction follow with known username adds to following', () => {
+  const r = applyFriendshipAction('follow', {}, { c: { pk: '3', username: 'c' } }, {}, { pk: '9', username: 'newfella' }, 1000);
   assert.ok(r);
   assert.equal(r.followingCount, 1);
-  assert.equal(r.followingObj.id9.pk, '9');
+  assert.equal(r.followingObj.newfella.pk, '9');
 });
 
 test('applyFriendshipAction remove_follower drops from followers', () => {
@@ -111,8 +118,13 @@ test('applyFriendshipAction remove_follower drops from followers', () => {
   assert.equal(r.username, 'bob');
 });
 
-test('applyFriendshipAction approve adds new follower event', () => {
+test('applyFriendshipAction approve with unknown pk (synthetic key) is skipped', () => {
   const r = applyFriendshipAction('approve', {}, {}, {}, { pk: '7' }, 3000);
+  assert.equal(r, null);
+});
+
+test('applyFriendshipAction approve with known username adds new follower event', () => {
+  const r = applyFriendshipAction('approve', {}, {}, {}, { pk: '7', username: 'fan7' }, 3000);
   assert.ok(r);
   assert.equal(r.followersCount, 1);
   assert.equal(r.newFollowers.length, 1);

@@ -57,7 +57,22 @@ export function diffAndRecord(prev, next, following, history, now) {
  * Prepend new events (newest first), cap at max.
  */
 export function mergeEvents(newEvents, storedEvents, max) {
-  return [...newEvents.reverse(), ...storedEvents].slice(0, max);
+  // Copy before reversing: background passes the same array it later
+  // filters/returns — in-place reverse mutated the caller's data.
+  const merged = [...newEvents].reverse();
+  for (const e of storedEvents) merged.push(e);
+  // Dedupe by username keeping the newest detectedAt: the same unfollow
+  // re-detected after a baseline reset used to stack duplicate feed rows.
+  const byUser = new Map();
+  let anon = 0;
+  for (const e of merged) {
+    const k = e && e.username != null ? `u:${e.username}` : `x:${anon++}`;
+    const prev = byUser.get(k);
+    if (!prev || ((e.detectedAt || 0) > (prev.detectedAt || 0))) byUser.set(k, e);
+  }
+  // Map.set keeps the FIRST insertion slot, so a stored winner could render
+  // above newer rows under clock skew — sort by detectedAt before capping.
+  return [...byUser.values()].sort((a, b) => (b.detectedAt || 0) - (a.detectedAt || 0)).slice(0, max);
 }
 
 /**
@@ -191,6 +206,10 @@ export function applyFriendshipAction(action, following, followers, history, { p
       };
     }
     case 'follow': {
+      // A synthetic `id<pk>` key means the account is unknown to every store
+      // — writing it would create a phantom dashboard row that can never be
+      // reconciled by username. Skip; the next completed sync picks it up.
+      if (!key || (!username && key === `id${pk}`)) return null;
       const gKey = findFollowingKeyByPk(gMap, pk, key);
       if (gKey) return null;
       const meta = metaFromStores(gMap, fMap, hist, key, pk);
@@ -227,6 +246,7 @@ export function applyFriendshipAction(action, following, followers, history, { p
       };
     }
     case 'approve': {
+      if (!key || (!username && key === `id${pk}`)) return null;
       const fKey = findFollowerKeyByPk(fMap, pk, key);
       if (fKey) return null;
       const meta = metaFromStores(gMap, fMap, hist, key, pk);

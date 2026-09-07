@@ -72,7 +72,8 @@ function esc(s) {
 function relTime(iso) {
   if (!iso) return 'nunca';
   const d = Date.now() - new Date(iso).getTime();
-  if (d < R) return 'agora';
+  if (!Number.isFinite(d)) return 'nunca'; // NaN / Invalid Date
+  if (d < R) return 'agora'; // future timestamps clamp to "agora" too
   const m = Math.floor(d / R);
   if (m < 60) return `há ${m} min`;
   const h = Math.floor(m / 60);
@@ -100,12 +101,16 @@ function placeholder(u) {
 
 // Resolve profile pics as same-origin blob URLs (deduped per page instance).
 // LRU-capped: the Map holds only the most-recent 512 URLs, so pathological
-// scrolling on huge accounts can't grow the string Map unboundedly.
+// scrolling on huge accounts can't grow the string Map unboundedly. Failed
+// fetches are cached too (failedPicUrls, ~10 min TTL) so a dead URL is not
+// refetched from the CDN on every render.
 // ponytail: evicted blobs are NOT revoked — revoking a URL that is still in
 // the DOM (re-rendered items) would break a visible avatar; blobs are freed
 // anyway when the document (popup/panel iframe) is destroyed.
 const PIC_CACHE_MAX = 512;
 const picCache = new Map(); // url -> Promise<blobUrl>
+const FAILED_PIC_TTL_MS = 10 * 60 * 1000;
+const failedPicUrls = new Map(); // url -> expiry timestamp (Date.now() + TTL)
 function isAllowedPicUrl(raw) {
   try {
     const u = new URL(raw);
@@ -126,6 +131,12 @@ function hydrateAvatars(root) {
       img.outerHTML = placeholder(item && item.dataset ? { username: item.dataset.u } : {});
       continue;
     }
+    const failedUntil = failedPicUrls.get(url);
+    if (failedUntil && Date.now() < failedUntil) {
+      const item = img.closest('.item');
+      img.outerHTML = placeholder(item && item.dataset ? { username: item.dataset.u } : {});
+      continue;
+    }
     let p = picCache.get(url);
     if (!p) {
       p = fetch(url, { referrer: 'https://www.instagram.com/', credentials: 'omit' })
@@ -134,7 +145,11 @@ function hydrateAvatars(root) {
           return r.blob();
         })
         .then((b) => URL.createObjectURL(b))
-        .catch((err) => { picCache.delete(url); throw err; });
+        .catch((err) => {
+          picCache.delete(url);
+          failedPicUrls.set(url, Date.now() + FAILED_PIC_TTL_MS);
+          throw err;
+        });
       picCache.set(url, p);
       if (picCache.size > PIC_CACHE_MAX) {
         const oldest = picCache.keys().next().value; // Map = insertion order
@@ -318,9 +333,36 @@ function renderError() {
   if (state.status === 'error' && state.error) {
     el.error().style.display = 'block';
     el.errText().textContent = state.error;
-    const isLogin = /sessão|login|verificação|limitada|feedback|aguarde|temporariamente|verificação/i.test(state.error);
-    el.errBtn().textContent = isLogin ? 'Abrir Instagram' : 'Tentar de novo';
-    el.errBtn().onclick = isLogin ? openInstagram : () => sendSync();
+    // Background persists an errorCode with every error state; classify the
+    // action from it. Regex on message text only as a fallback for state
+    // persisted by older versions without errorCode.
+    const code = state.errorCode;
+    let action; // 'open' | 'retry' | 'none'
+    if (code === 'not-logged-in' || code === 'checkpoint' || code === 'feedback-required') {
+      action = 'open';
+    } else if (code === 'rate-limited' || code === 'limit') {
+      action = 'none'; // message already says when to retry — no button noise
+    } else if (code) {
+      action = 'retry';
+    } else {
+      // Legacy persisted state (pre-errorCode): fall back to text heuristics.
+      action = /sessão|login|verificação|limitada|feedback|aguarde|temporariamente/i.test(state.error)
+        ? 'open'
+        : 'retry';
+    }
+    const btn = el.errBtn();
+    if (action === 'open') {
+      btn.style.display = '';
+      btn.textContent = 'Abrir Instagram';
+      btn.onclick = openInstagram;
+    } else if (action === 'retry') {
+      btn.style.display = '';
+      btn.textContent = 'Tentar de novo';
+      btn.onclick = () => sendSync();
+    } else {
+      btn.style.display = 'none';
+      btn.onclick = null;
+    }
   } else {
     el.error().style.display = 'none';
   }
@@ -342,7 +384,13 @@ function renderTabs() {
     b.onclick = () => { tab = b.dataset.tab; shown = 0; invalidateListCaches(); render(); };
   });
   const meta = el.meta();
-  if (meta && state.ownUsername) meta.textContent = `@${state.ownUsername} · listas completas`;
+  if (meta && state.ownUsername) {
+    // state.incomplete is set by the background when a list was truncated by
+    // the page cap — the pill already shows "incompleto"; echo it in the meta.
+    meta.textContent = state.incomplete
+      ? `@${state.ownUsername} · lista incompleta — sincronize de novo`
+      : `@${state.ownUsername} · listas completas`;
+  }
 }
 
 function renderToolbar() {
@@ -363,7 +411,9 @@ function renderToolbar() {
 }
 
 async function exportBackupFile() {
-  const res = await chrome.runtime.sendMessage({ type: 'igf-export-backup' });
+  // SW gone / popup closed mid-call: surface it, never an unhandled rejection.
+  const res = await chrome.runtime.sendMessage({ type: 'igf-export-backup' })
+    .catch(() => null);
   if (!res || !res.ok || !res.backup) {
     alert((res && res.error) || 'Não foi possível exportar o backup.');
     return;
@@ -390,12 +440,13 @@ async function importBackupFile(file) {
     return;
   }
   if (!confirm('Substituir os dados atuais desta instalação pelo backup?')) return;
-  const res = await chrome.runtime.sendMessage({ type: 'igf-import-backup', backup });
+  const res = await chrome.runtime.sendMessage({ type: 'igf-import-backup', backup })
+    .catch(() => null);
   if (!res || !res.ok) {
     alert((res && res.error) || 'Falha ao importar backup.');
     return;
   }
-  await load();
+  await load().catch(() => {});
 }
 
 function buildPool() {
@@ -607,9 +658,27 @@ function openProfile(username) {
 }
 
 async function load() {
-  const o = await chrome.storage.local.get([
-    'igf.state', 'igf.settings', 'igf.followers', 'igf.following', 'igf.followHistory', 'igf.unfollowEvents', 'igf.newFollowerEvents',
-  ]);
+  let o;
+  try {
+    o = await chrome.storage.local.get([
+      'igf.state', 'igf.settings', 'igf.followers', 'igf.following', 'igf.followHistory', 'igf.unfollowEvents', 'igf.newFollowerEvents',
+    ]);
+  } catch {
+    // storage.local.get rejecting (SW teardown races etc.) must not kill the
+    // page with an unhandled rejection — render an explicit error state.
+    o = null;
+  }
+  if (!o) {
+    state = { status: 'error', error: 'Não foi possível carregar os dados. Tente de novo.', errorCode: 'network' };
+    settings = {};
+    followers = {};
+    following = {};
+    history = {};
+    events = [];
+    newFollowers = [];
+    render();
+    return;
+  }
   state = o['igf.state'] || { status: 'idle' };
   settings = o['igf.settings'] || {};
   followers = o['igf.followers'] || {};
@@ -639,16 +708,17 @@ el.cardF().onclick = () => { tab = TABS.fans; shown = 0; invalidateListCaches();
 el.cardM().onclick = () => { tab = TABS.nonFollowers; shown = 0; invalidateListCaches(); render(); };
 el.search().addEventListener('input', (e) => { query = e.target.value; shown = 0; invalidateListCaches(); renderHeavy(); });
 el.interval().addEventListener('change', async (e) => {
+  // SW restarting / popup closing mid-call: swallow, never an unhandled rejection.
   await chrome.runtime.sendMessage({
     type: 'igf-settings-update',
     settings: { refreshMinutes: Number(e.target.value) },
-  });
+  }).catch(() => {});
 });
 el.notif().addEventListener('change', async (e) => {
   await chrome.runtime.sendMessage({
     type: 'igf-settings-update',
     settings: { notificationsEnabled: e.target.checked },
-  });
+  }).catch(() => {});
 });
 el.openIg().addEventListener('click', (e) => { e.preventDefault(); openInstagram(); });
 
@@ -708,12 +778,18 @@ const deleteBtn = $('delete-data');
 if (deleteBtn) {
   deleteBtn.addEventListener('click', async () => {
     if (!confirm('Apagar todos os dados do IG FollowGuard neste navegador?')) return;
-    await chrome.runtime.sendMessage({ type: 'igf-delete-all' });
+    await chrome.runtime.sendMessage({ type: 'igf-delete-all' }).catch(() => {});
     await load();
   });
 }
 
 
 export { esc, itemHtml };
-
-if (!globalThis.__IGF_SKIP_UI_BOOT__) load();
+if (!globalThis.__IGF_SKIP_UI_BOOT__) {
+  load().catch(() => {
+    // Boot last resort: something blew up beyond load()'s own catch — surface
+    // it in the UI instead of dying with an unhandled rejection.
+    state = { status: 'error', error: 'Não foi possível carregar o painel. Tente de novo.', errorCode: 'network' };
+    try { render(); } catch { /* DOM not ready — nothing more we can do */ }
+  });
+}

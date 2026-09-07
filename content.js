@@ -12,9 +12,9 @@
   let own = null;        // { username, uid } resolved from the SW (session)
   let host = null;       // injected host element (FAB + panel shadow)
   let panel = null;
-  let panelReady = false;
   let lastPath = null;
   let syncBanner = null;
+  let lastGearRect = null; // gear viewport rect at last successful mount
 
   const showSyncBanner = () => {
     if (!syncBanner) {
@@ -48,7 +48,10 @@
     if (!host || !host.shadowRoot) return;
     const fab = host.shadowRoot.querySelector('button');
     if (fab) {
-      const label = `IG FollowGuard — ${count} não seguem de volta`;
+      // '–' = never synced: never claim "0 não seguem de volta" without data.
+      const label = count === '–'
+        ? 'IG FollowGuard — sincronize para ver quem não te segue de volta'
+        : `IG FollowGuard — ${count} não seguem de volta`;
       fab.title = label;
       fab.setAttribute('aria-label', label);
     }
@@ -59,7 +62,7 @@
     try {
       const o = await chrome.storage.local.get('igf.state');
       const st = o['igf.state'] || {};
-      setBadge(typeof st.notFollowingBackCount === 'number' ? st.notFollowingBackCount : '–');
+      setBadge(st.lastSyncAt && typeof st.notFollowingBackCount === 'number' ? st.notFollowingBackCount : '–');
     } catch { /* badge is best-effort */ }
   };
 
@@ -84,8 +87,14 @@
         if (r.width || r.height) return node;
       }
     } catch { /* layout changed — fall through */ }
-    // Fallback: the gear's own label (PT-BR "opções"; never "Configurações").
-    const gear = document.querySelector('[aria-label="opções"], [aria-label="Opções"]');
+    // Fallback: the gear by its label. Exact PT-BR labels first, then any
+    // button-like element whose aria-label reads as an options/settings entry
+    // (localized variants: "opções", "Configurações", "Settings", ...).
+    const candidates = document.querySelectorAll(
+      '[aria-label="opções"], [aria-label="Opções"], [aria-label="Configurações"], [role=button][aria-label]',
+    );
+    const gear = Array.from(candidates).find((n) =>
+      /opç|option|settings|config/i.test(n.getAttribute('aria-label') || ''));
     if (gear) {
       const r = gear.getBoundingClientRect();
       if (r.width || r.height) return gear;
@@ -106,6 +115,7 @@
     host.style.cssText =
       'all:initial;display:inline-flex;align-items:center;vertical-align:middle;' +
       'margin-left:12px;position:relative;z-index:2;flex:none;';
+    lastGearRect = gearDiv.getBoundingClientRect();
     return true;
   };
 
@@ -181,18 +191,32 @@
       panel.remove();
       panel = null;
     }
-    panelReady = false;
+  };
+
+  // True when the anchor gear vanished or its viewport rect moved >2px since
+  // the last mount (scroll/resize/SPA re-layout). Cheap: one XPath probe.
+  const gearRectMoved = () => {
+    const gear = findGearDiv();
+    if (!gear) return false; // gear gone entirely — leave the FAB where it is
+    const r = gear.getBoundingClientRect();
+    const moved = lastGearRect &&
+      (Math.abs(r.left - lastGearRect.left) > 2 || Math.abs(r.top - lastGearRect.top) > 2);
+    lastGearRect = r;
+    return !!moved;
   };
 
   const tick = () => {
     const p = location.pathname;
-    if (p === lastPath) return;
-    lastPath = p;
     if (isOwnProfilePath(p)) {
-      if (!host) buildFab();
-    } else {
+      if (!host) {
+        buildFab();
+      } else if (p !== lastPath || gearRectMoved()) {
+        mountHostNearGear(); // SPA nav or layout shift: re-anchor next to the gear
+      }
+    } else if (host) {
       removeFab();
     }
+    lastPath = p;
   };
 
   const adoptOwn = (r) => {
@@ -207,17 +231,13 @@
     if (ev.origin !== extOrigin) return;
     if (!ev.data || !host || !panel) return;
     if (ev.data.type === 'igf-close-panel' && panel) panel.style.display = 'none';
-    if (ev.data.type === 'igf-panel-ready' && !panelReady) {
-      panelReady = true;
-      try {
-        const fab = host.shadowRoot && host.shadowRoot.querySelector('button');
-        if (fab) {
-          const label = `${fab.title} · painel OK`;
-          fab.title = label;
-          fab.setAttribute('aria-label', label);
-        }
-      } catch { /* best-effort */ }
-    }
+    // 'igf-panel-ready' needs no handling: the FAB title stays clean (the old
+    // " · painel OK" suffix was pure screen-reader noise).
+  });
+
+  // Re-anchor on viewport resize — the profile header reflows with the width.
+  window.addEventListener('resize', () => {
+    if (host) mountHostNearGear();
   });
 
   chrome.runtime.onMessage.addListener((msg) => {

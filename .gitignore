@@ -1,2 +1,6 @@
 .codeintel/
 .tmp-audit/
+
+# dev-only reload bootstrap (staged by hand into the unpacked-extension dir)
+reload-bootstrap.html
+reload-bootstrap.js

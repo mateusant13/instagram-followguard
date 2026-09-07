@@ -157,9 +157,31 @@ async function getState() {
   return { ...emptyState(), ...(o[K.state] || {}) };
 }
 
+// Serialized read-modify-write: the sync branches, alarms and message
+// handlers all patch the same key; an unlocked RMW loses concurrent updates
+// (a lost retryN silently breaks backoff escalation). Same chain pattern as
+// transportLock — a failed write must not poison the chain.
+let stateLock = Promise.resolve();
 async function setState(patch) {
-  const o = await chrome.storage.local.get(K.state);
-  await chrome.storage.local.set({ [K.state]: { ...emptyState(), ...(o[K.state] || {}), ...patch } });
+  const run = stateLock.then(async () => {
+    const o = await chrome.storage.local.get(K.state);
+    await chrome.storage.local.set({ [K.state]: { ...emptyState(), ...(o[K.state] || {}), ...patch } });
+  });
+  stateLock = run.catch(() => {});
+  return run;
+}
+// Read-modify-write as ONE locked step: fn gets the freshly merged state and
+// returns the patch to persist (fn must be SYNC — an async fn would run its
+// reads outside the lock). Same merge semantics and chain-poison guard as
+// setState.
+async function patchState(fn) {
+  const run = stateLock.then(async () => {
+    const o = await chrome.storage.local.get(K.state);
+    const cur = { ...emptyState(), ...(o[K.state] || {}) };
+    await chrome.storage.local.set({ [K.state]: { ...cur, ...fn(cur) } });
+  });
+  stateLock = run.catch(() => {});
+  return run;
 }
 
 
@@ -230,14 +252,28 @@ let metaLock = Promise.resolve();
 // Best-effort: a failing checkpoint write only costs resume granularity.
 function savePagePart(kind, uid, seq, maxId, users) {
   const key = partKey(kind, uid, seq);
-  metaLock = metaLock.then(async () => {
+  const run = metaLock.then(async () => {
     await chrome.storage.local.set({ [key]: { maxId, at: Date.now(), users } });
-    const o = await chrome.storage.local.get(PART_META);
-    const meta = o[PART_META] || { keys: [] };
-    if (!meta.keys.includes(key)) meta.keys.push(key);
-    await chrome.storage.local.set({ [PART_META]: meta });
+    try {
+      const o = await chrome.storage.local.get(PART_META);
+      const meta = o[PART_META] || { keys: [] };
+      if (!meta.keys.includes(key)) meta.keys.push(key);
+      await chrome.storage.local.set({ [PART_META]: meta });
+    } catch (err) {
+      // The value write succeeded but the index failed — an unindexed key
+      // is invisible to clearPartials and would leak a full page payload
+      // forever. Drop it with the page.
+      await chrome.storage.local.remove(key).catch(() => {});
+      throw err;
+    }
   });
-  return metaLock;
+  // The chain survives a failed write: without the .catch, ONE storage
+  // rejection (quota / SW teardown) poisoned every later checkpoint for the
+  // SW's lifetime — fetchAllUsers swallows onPart errors, so the walk kept
+  // going with checkpointing silently dead (transportLock already uses this
+  // pattern correctly).
+  metaLock = run.catch(() => {});
+  return run;
 }
 
 async function readPartials(uid) {
@@ -279,6 +315,7 @@ function makeListProgressTracker() {
   let publishChain = Promise.resolve();
   return {
     counts,
+    flush() { return publishChain; },
     onProgress({ kind: k, fetched, users }) {
       counts[k] = fetched;
       const patch = { [k === 'following' ? K.following : K.followers]: usersToObj(users) };
@@ -328,7 +365,12 @@ let openedTabId = null; // tab we created for the sync (must be closed after)
 async function pingProxy(tabId) {
   try {
     const r = await chrome.tabs.sendMessage(tabId, { igf: 'ping' });
-    return !!(r && r.pong);
+    // Version token: a tab whose content script predates an extension
+    // reload answers the ping but runs the OLD build's proxy code. Treat a
+    // mismatch (or a pre-token proxy, which sends no version) as dead so
+    // ensureIgTab opens a fresh tab instead of driving stale code.
+    const self = chrome.runtime.getManifest().version;
+    return !!(r && r.pong && r.version === self);
   } catch {
     return false;
   }
@@ -364,6 +406,9 @@ async function ensureIgTab() {
   // Prefer an existing IG tab whose content script ANSWERS — a pre-reload
   // tab (no listener) is skipped, never navigated.
   const tabs = await chrome.tabs.query({ url: 'https://www.instagram.com/*' });
+  // Prefer the tab the user is actually looking at: freshest session, and
+  // the sync banner lands where the user can see it.
+  tabs.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
   for (const t of tabs) {
     if (await pingProxy(t.id)) {
       syncTabId = t.id;
@@ -452,7 +497,9 @@ async function pageTransport(path, _session, signal) {
   throw new IgApiError('network', 'Falha de rede ao falar com o Instagram.');
 }
 
-const TRANSIENT_CODES = new Set(['http', 'network', 'rate-limited']);
+// 'incomplete' = the completeness oracle rejected a short list: transient —
+// checkpoints survive and the escalating auto-retry resumes the walk.
+const TRANSIENT_CODES = new Set(['http', 'network', 'rate-limited', 'incomplete']);
 const RETRY_ALARM = 'igf-sync-retry';
 const CONTINUE_ALARM = 'igf-sync-continue';
 const SEGMENT_PAUSE_MS = 90_000; // pause between 12k-user chunks (~500 pages)
@@ -534,11 +581,16 @@ export async function fetchListComplete(kind, uid, session, listOpts, readPartia
 
 function scheduleErrorRetry(code) {
   if (!TRANSIENT_CODES.has(code)) return;
-  getState().then(async (st) => {
-    const n = Math.min(Number(st.retryN) || 0, RETRY_DELAYS_MIN.length - 1);
-    await chrome.alarms.create(RETRY_ALARM, { delayInMinutes: RETRY_DELAYS_MIN[n] });
-    await setState({ retryN: n + 1 });
-  }).catch(() => {});
+  // retryN read-modify-write must live inside the lock or overlapping
+  // schedules restart the escalation ladder. The retry alarm is armed only
+  // after the increment lands, so a failed write leaves no orphan timer.
+  let n = 0;
+  patchState((st) => {
+    n = Math.min(Number(st.retryN) || 0, RETRY_DELAYS_MIN.length - 1);
+    return { retryN: n + 1 };
+  })
+    .then(() => chrome.alarms.create(RETRY_ALARM, { delayInMinutes: RETRY_DELAYS_MIN[n] }))
+    .catch(() => {});
 }
 
 async function sync(trigger) {
@@ -591,16 +643,20 @@ async function sync(trigger) {
       const st0 = await getState();
       let uid = session.uid;
       let username = st0.ownUsername || null; // runtime-resolved, never hardcoded
-      if (uid && (!username || String(uid) !== String(st0.ownUserId || ''))) {
-        username = (await resolveOwnUser(null, session, uid)).username;
-      } else if (!uid) {
-        if (!username) {
-          throw new IgApiError('not-logged-in', 'Não encontrei seu ID de usuário. Abra instagram.com logado.');
-        }
-        const info = await resolveOwnUser(username, session);
-        uid = info.uid;
-        username = info.username;
+      if (!uid && !username) {
+        throw new IgApiError('not-logged-in', 'Não encontrei seu ID de usuário. Abra instagram.com logado.');
       }
+      // ALWAYS resolve the own profile, even when uid+username are known:
+      // besides confirming identity, this is the completeness oracle — the
+      // declared follower_count/following_count is the only way to detect a
+      // list Instagram returned truncated-but-"completed" (the "só 20
+      // pessoas" bug). One extra request per sync, through the same
+      // humanized page transport.
+      const info = uid
+        ? await resolveOwnUser(null, session, uid)
+        : await resolveOwnUser(username, session);
+      uid = info.uid;
+      username = info.username;
       if (uid) await setState({ ownUserId: String(uid) });
       if (username) await setState({ ownUsername: username });
 
@@ -609,12 +665,25 @@ async function sync(trigger) {
       // per page; each page is checkpointed so a failure/restart resumes.
       const listAbort = new AbortController();
       const progress = makeListProgressTracker();
+      const expected = {
+        following: Number.isFinite(info.followingCount) ? info.followingCount : null,
+        followers: Number.isFinite(info.followerCount) ? info.followerCount : null,
+      };
       const listOpts = (kind, resume) => ({
         signal: listAbort.signal,
         resume,
+        expectedCount: expected[kind],
         onProgress: (payload) => progress.onProgress(payload),
         onPart: ({ seq, maxId, users }) => savePagePart(kind, uid, seq, maxId, users),
       });
+      // The progress tracker persists the growing lists under the
+      // authoritative keys for live dashboard progress. If the walk then
+      // fails, those keys hold a TRUNCATED list — snapshot them first and
+      // restore on failure, so a short list never survives a failed sync as
+      // the displayed baseline (a SW death mid-walk can still leave them
+      // short until the next completed sync; the diff/notify path reads
+      // prevFollowers, which only a COMPLETE walk ever writes).
+      const prewalk = await chrome.storage.local.get([K.followers, K.following]);
       let following;
       let followers;
       try {
@@ -622,6 +691,15 @@ async function sync(trigger) {
         followers = await fetchListComplete('followers', uid, session, listOpts, readPartials);
       } catch (err) {
         listAbort.abort();
+        await progress.flush().catch(() => {}); // no tracker write may land after the restore
+        const pf = prewalk[K.followers] || {};
+        const pg = prewalk[K.following] || {};
+        await chrome.storage.local.set({ [K.followers]: pf, [K.following]: pg });
+        await setState({
+          followersCount: Object.keys(pf).length,
+          followingCount: Object.keys(pg).length,
+          notFollowingBackCount: countNotFollowingBack(pg, pf),
+        });
         throw err;
       }
 
@@ -635,12 +713,10 @@ async function sync(trigger) {
         history: stored[K.history] || {},
       });
 
-      // --- persist current lists (followers first, then following) ---
-      await chrome.storage.local.set({
-        [K.followers]: Object.fromEntries(followers),
-        [K.following]: Object.fromEntries(following),
-      });
-
+      // The final lists, baseline, history and events all describe ONE
+      // snapshot and MUST land together: a SW death between the list write
+      // and the baseline write left the next sync diffing a NEW list
+      // against an OLD prev — mass duplicate unfollow events.
       const now = Date.now();
 
       // --- prepend events (newest first), cap at EVENTS_MAX ---
@@ -675,6 +751,8 @@ async function sync(trigger) {
       }
 
       const persist = {
+        [K.followers]: Object.fromEntries(followers),
+        [K.following]: Object.fromEntries(following),
         [K.prevFollowers]: Object.fromEntries(followers),
         [K.history]: snapshot.newHistory,
         [K.events]: allEvents,
@@ -707,7 +785,10 @@ async function sync(trigger) {
         followersCount: followers.size,
         followingCount: following.size,
         notFollowingBackCount: notFollowingBack.length,
-        incomplete: false,
+        // The oracle only proves completeness when BOTH declared counts were
+        // available; without them the walk is unverified — say so honestly
+        // instead of claiming "listas completas".
+        incomplete: expected.following == null || expected.followers == null,
         retryN: 0,
         freeManualRefresh: true,
       });
@@ -716,7 +797,7 @@ async function sync(trigger) {
     } catch (err) {
       const msg = err instanceof IgApiError ? err.message : String(err && err.message || err).slice(0, 200);
       const code = err instanceof IgApiError ? err.code : null;
-      const incomplete = code === 'limit';
+      const incomplete = code === 'limit' || code === 'incomplete';
       await setState({ status: 'error', error: msg, syncProgress: null, errorCode: code, incomplete });
       scheduleErrorRetry(code); // transient only — login/checkpoint/gate never auto-retry
       return { ok: false, error: msg };
@@ -728,23 +809,68 @@ async function sync(trigger) {
   return runningSync;
 }
 
-/** Resolve own user id + username (uid from ds_user_id cookie, else by username). */
-async function resolveOwnUser(username, session, knownUid) {
+/**
+ * Resolve own user id + username + DECLARED follower/following counts.
+ * The counts feed fetchAllUsers' completeness oracle — a list that finishes
+ * materially short of the declared count is truncated, never accepted.
+ */
+export async function resolveOwnUser(username, session, knownUid) {
   if (knownUid) {
     // /api/v1/users/{pk}/info/ echoes the profile (no username needed).
     // Classified + retried: a transient blip on the sync's FIRST step used to
     // kill the whole sync with zero retries (raw fetch, no classification).
     const body = await transientRetry(() => apiFetch(`/api/v1/users/${knownUid}/info/`, session));
-    if (body && body.user && body.user.username) {
-      return { uid: knownUid, username: body.user.username };
+    const u = body && body.user;
+    if (u && u.username) {
+      // Declared counts are the oracle's only input — Number.isFinite
+      // already maps a missing key to null (falsy counts stay honest).
+      let fBy = Number.isFinite(u.follower_count) ? u.follower_count : null;
+      let f = Number.isFinite(u.following_count) ? u.following_count : null;
+      if (fBy == null || f == null) {
+        // /users/{pk}/info/ often omits the counts — without them the oracle
+        // is silently inert and a truncated walk is accepted. ONE
+        // web_profile_info lookup fills ONLY the missing side(s);
+        // best-effort: on failure keep what was found (the sync then honestly
+        // reports incomplete instead of dying on its first step).
+        try {
+          const params = new URLSearchParams({ username: u.username });
+          const web = await transientRetry(() =>
+            apiFetch(`/api/v1/users/web_profile_info/?${params.toString()}`, session));
+          const du = web && web.data && web.data.user;
+          if (du) {
+            if (fBy == null) {
+              const wfBy = du.edge_followed_by && Number(du.edge_followed_by.count);
+              if (Number.isFinite(wfBy)) fBy = wfBy;
+            }
+            if (f == null) {
+              const wf = du.edge_follow && Number(du.edge_follow.count);
+              if (Number.isFinite(wf)) f = wf;
+            }
+          }
+        } catch { /* keep partial counts — incomplete beats a dead sync */ }
+      }
+      return {
+        uid: knownUid,
+        username: u.username,
+        followerCount: fBy,
+        followingCount: f,
+      };
     }
     throw new IgApiError('http', 'Instagram respondeu com uma resposta inesperada.');
   }
   if (username) {
     const params = new URLSearchParams({ username });
     const body = await transientRetry(() => apiFetch(`/api/v1/users/web_profile_info/?${params.toString()}`, session));
-    if (body && body.data && body.data.user && body.data.user.username) {
-      return { uid: String(body.data.user.id), username: body.data.user.username };
+    const du = body && body.data && body.data.user;
+    if (du && du.username) {
+      const fBy = du.edge_followed_by && Number(du.edge_followed_by.count);
+      const f = du.edge_follow && Number(du.edge_follow.count);
+      return {
+        uid: String(du.id),
+        username: du.username,
+        followerCount: Number.isFinite(fBy) ? fBy : null,
+        followingCount: Number.isFinite(f) ? f : null,
+      };
     }
     throw new IgApiError('http', 'Instagram respondeu com uma resposta inesperada.');
   }
@@ -769,7 +895,9 @@ export async function notifyUnfollows(events) {
     }
     return;
   }
-  await chrome.notifications.create(`igf-uf-summary-${Date.now()}`, {
+  // 'igf-sum-' prefix: the click handler's /^igf-uf-(.+?)-\d+$/ must NOT
+  // match the summary (it used to open instagram.com/summary/ — a 404).
+  await chrome.notifications.create(`igf-sum-${Date.now()}`, {
     type: 'basic',
     iconUrl: chrome.runtime.getURL('images/icon128.png'),
     title: `${N} pessoas deixaram de te seguir`,
@@ -806,7 +934,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   // on Instagram = skip; the next panel open / alarm with a tab handles it.
   try {
     const tabs = await chrome.tabs.query({ url: 'https://www.instagram.com/*' });
-    if (!tabs.length) return;
+    if (!tabs.length) {
+      // No IG tab = no page transport. A one-shot retry consumed here would
+      // be silently lost until the next periodic alarm (never, if autoSync
+      // is off) — re-arm it cheaply: a later wake-up, zero IG traffic.
+      if (alarm.name === RETRY_ALARM || alarm.name === CONTINUE_ALARM) {
+        await chrome.alarms.create(alarm.name, { delayInMinutes: 15 });
+      }
+      return;
+    }
   } catch {
     return;
   }
@@ -877,7 +1013,8 @@ async function recordFriendshipAction({ action, pk, username } = {}) {
 // Messages (dashboard popup / panel -> background)
 // ---------------------------------------------------------------------------
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!sender || sender.id !== chrome.runtime.id) return false; // defense in depth: only own contexts
   if (!msg || !msg.type || !msg.type.startsWith('igf-')) return false;
   if (msg.type === 'igf-sync') {
     sync(msg.trigger || 'manual').then(sendResponse);
@@ -970,15 +1107,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     recordFriendshipAction({ action: 'unfollow', pk: msg.pk, username: msg.username }).then(sendResponse);
     return true;
   }
-  if (msg.type === 'igf-open-profile') {
-    chrome.tabs.create({ url: `https://www.instagram.com/${encodeURIComponent(msg.username)}/` });
-    sendResponse({ ok: true });
-    return false;
-  }
   return false;
 });
 
 chrome.notifications.onClicked.addListener((id) => {
+  if (id.startsWith('igf-sum-')) {
+    // Summary toast: open the dashboard (the list of who left), not a profile.
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+    chrome.notifications.clear(id);
+    return;
+  }
   const m = id.match(/^igf-uf-(.+?)-\d+$/);
   if (m) {
     chrome.tabs.create({ url: `https://www.instagram.com/${encodeURIComponent(m[1])}/` });
