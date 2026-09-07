@@ -687,13 +687,7 @@ async function load() {
   events = enrichEvents(o['igf.unfollowEvents'] || []);
   newFollowers = enrichEvents(o['igf.newFollowerEvents'] || []);
   render();
-  // Popup + panel: kick sync when idle and data is missing or stale.
-  if (state.status !== 'syncing') {
-    const staleMs = (settings.refreshMinutes || 60) * 60 * 1000;
-    const empty = !Object.keys(followers).length && !Object.keys(following).length;
-    const stale = settings.consentAt && (!state.lastSyncAt || Date.now() - new Date(state.lastSyncAt).getTime() > staleMs);
-    if (empty || stale) sendSync(); // manual trigger grants consent on first open
-  }
+  // No auto-sync on open: sync runs only on the ↻ button or background alarms.
   // Announce the dashboard is live (the injected panel listens; harmless
   // when this page runs as the toolbar popup — posting to self, no receiver).
   try {
