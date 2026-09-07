@@ -310,6 +310,22 @@ function countNotFollowingBack(followingObj, followersObj) {
   return Object.keys(followingObj || {}).filter((u) => !fKeys.has(u)).length;
 }
 
+/**
+ * Restore the last-known-good lists (and the counter derived from them) after
+ * a follow-list walk failed. Exported as the tested seam for the rollback.
+ */
+export async function restoreListsAfterFailedWalk(prewalk) {
+  const pf = (prewalk && prewalk[K.followers]) || {};
+  const pg = (prewalk && prewalk[K.following]) || {};
+  await chrome.storage.local.set({ [K.followers]: pf, [K.following]: pg });
+  await patchState(() => ({
+    followingCount: Object.keys(pg).length,
+    followersCount: Object.keys(pf).length,
+    notFollowingBackCount: countNotFollowingBack(pg, pf),
+  }));
+  return { followingCount: Object.keys(pg).length, followersCount: Object.keys(pf).length };
+}
+
 function makeListProgressTracker() {
   const counts = { following: 0, followers: 0 };
   let publishChain = Promise.resolve();
@@ -692,14 +708,7 @@ async function sync(trigger) {
       } catch (err) {
         listAbort.abort();
         await progress.flush().catch(() => {}); // no tracker write may land after the restore
-        const pf = prewalk[K.followers] || {};
-        const pg = prewalk[K.following] || {};
-        await chrome.storage.local.set({ [K.followers]: pf, [K.following]: pg });
-        await setState({
-          followersCount: Object.keys(pf).length,
-          followingCount: Object.keys(pg).length,
-          notFollowingBackCount: countNotFollowingBack(pg, pf),
-        });
+        await restoreListsAfterFailedWalk(prewalk);
         throw err;
       }
 

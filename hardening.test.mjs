@@ -45,7 +45,7 @@ globalThis.document = {
 };
 globalThis.parent = { postMessage() {} };
 
-const { deleteAllData, manualSyncCooldownInfo, manualSyncCooldownMs, recordManualUnfollowMaps } = await import('./background.js');
+const { deleteAllData, manualSyncCooldownInfo, manualSyncCooldownMs, recordManualUnfollowMaps, restoreListsAfterFailedWalk } = await import('./background.js');
 
 test('delete-all wipes every igf.* key incl. resume.* and resets defaults', async () => {
   Object.assign(store, {
@@ -105,6 +105,28 @@ test('recordManualUnfollowMaps removes user and updates counts', () => {
   assert.equal(patch.notFollowingBackCount, 1);
   assert.equal(patch.followingObj.alice.username, 'alice');
   assert.equal(patch.followingObj.bob, undefined);
+});
+
+test('failed walk rolls the counter back to the last-known-good lists', async () => {
+  // The progress tracker publishes the growing lists under the authoritative
+  // igf.following / igf.followers keys. When the walk then dies those keys —
+  // and igf.state — keep the TRUNCATED data, so the "não seguem de volta"
+  // badge shows a number computed from a partial list as if it were final.
+  const prewalk = {
+    'igf.following': { a: { pk: '1', username: 'a' }, b: { pk: '2', username: 'b' }, c: { pk: '3', username: 'c' } },
+    'igf.followers': { a: { pk: '1', username: 'a' } },
+  };
+  Object.assign(store, {
+    'igf.following': { a: { pk: '1', username: 'a' } }, // mid-walk partial
+    'igf.followers': {},
+    'igf.state': { status: 'error', followingCount: 1, followersCount: 0, notFollowingBackCount: 1 },
+  });
+  await restoreListsAfterFailedWalk(prewalk);
+  assert.deepEqual(Object.keys(store['igf.following']), ['a', 'b', 'c']);
+  assert.deepEqual(Object.keys(store['igf.followers']), ['a']);
+  assert.equal(store['igf.state'].followingCount, 3);
+  assert.equal(store['igf.state'].followersCount, 1);
+  assert.equal(store['igf.state'].notFollowingBackCount, 2, 'counter recomputed from restored lists');
 });
 
 test('itemHtml escapes full_name XSS payload in text and title', () => {
