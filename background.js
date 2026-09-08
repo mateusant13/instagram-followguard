@@ -240,7 +240,19 @@ function nowIso() {
 // contiguous labels with TORN content. Bumping the prefix invalidates any
 // such partials on upgrade (a torn checkpoint would resume an incomplete
 // list). Old keys are never read again (harmless orphans).
-const PART_META = 'igf.resume.meta';
+// True when at least one instagram.com tab is open. Every automatic sync
+// entrypoint (alarm, startup, SW-restart resume) MUST gate on this: the sync
+// transport runs on an IG tab, and ensureIgTab() would otherwise OPEN one on
+// its own — an auto-opened instagram.com is exactly what we never do.
+async function hasOpenIgTab() {
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://www.instagram.com/*' });
+    return tabs.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 const PART_PREFIX = 'igf.resume.';
 const partKey = (kind, uid, seq) => `${PART_PREFIX}${kind}.${uid}.${seq}`;
 
@@ -971,18 +983,14 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 chrome.runtime.onStartup.addListener(async () => {
   await scheduleAlarm();
   const meta = (await chrome.storage.local.get(PART_META))[PART_META];
-  const hasPartials = !!(meta && meta.keys && meta.keys.length);
   if (hasPartials) {
-    await resumeInterruptedSync();
+    // Resume is an automatic sync: same tab gate as alarms — without it
+    // ensureIgTab() would open instagram.com by itself on browser boot.
+    if (await hasOpenIgTab()) await resumeInterruptedSync();
     return;
   }
   const s = await getSettings();
-  if (s.autoSync && s.consentAt) {
-    try {
-      const tabs = await chrome.tabs.query({ url: 'https://www.instagram.com/*' });
-      if (tabs.length) sync('startup');
-    } catch { /* skip */ }
-  }
+  if (s.autoSync && s.consentAt && (await hasOpenIgTab())) sync('startup');
 });
 
 
@@ -1142,7 +1150,10 @@ scheduleAlarm().catch(() => {});
     const meta = (await chrome.storage.local.get(PART_META))[PART_META];
     const hasPartials = !!(meta && meta.keys && meta.keys.length);
     if (hasPartials) {
-      await resumeInterruptedSync();
+      // Same gate as onStartup: no IG tab open = nobody is on Instagram,
+      // and resume would auto-open a tab via ensureIgTab(). Skip; the next
+      // alarm or panel open handles it.
+      if (await hasOpenIgTab()) await resumeInterruptedSync();
       return;
     }
     const st = await getState();
