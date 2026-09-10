@@ -557,7 +557,7 @@ function renderList() {
 }
 
 function renderSettings() {
-  el.interval().value = String(settings.refreshMinutes || 60);
+  el.interval().value = String(settings.refreshMinutes || 180);
   el.notif().checked = settings.notificationsEnabled !== false;
 }
 
