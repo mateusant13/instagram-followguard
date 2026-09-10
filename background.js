@@ -253,6 +253,12 @@ async function hasOpenIgTab() {
   }
 }
 
+// 'igf.resume.' namespace (v2): the pre-fix build wrote `seq: page` — a
+// restarted loop counter clobbered old checkpoints, so storage can hold
+// contiguous labels with TORN content. Bumping the prefix invalidates any
+// such partials on upgrade (a torn checkpoint would resume an incomplete
+// list). Old keys are never read again (harmless orphans).
+const PART_META = 'igf.resume.meta';
 const PART_PREFIX = 'igf.resume.';
 const partKey = (kind, uid, seq) => `${PART_PREFIX}${kind}.${uid}.${seq}`;
 
