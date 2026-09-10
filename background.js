@@ -1045,39 +1045,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === 'igf-get-own') {
     // Logged-in profile, resolved from the session at runtime (never hardcoded).
+    // Hunt V3 (half-2): this handler runs on EVERY IG tab the FAB lives
+    // on, and the old path used withPageTransport(), which auto-OPENS
+    // instagram.com via ensureIgTab() when no tab answers — an
+    // extension-opened tab is an automation fingerprint and a per-tab
+    // identity probe. So resolve ONLY from storage here; if unresolved,
+    // ask the user to open IG once. (sync() keeps its own transport +
+    // tab policy.)
     (async () => {
       const st = await getState();
       if (st.ownUsername) {
         sendResponse({ ok: true, username: st.ownUsername, uid: st.ownUserId ? String(st.ownUserId) : null });
         return;
       }
-      const session = await readSession().catch((err) => err);
-      if (session instanceof IgApiError) {
-        sendResponse({ ok: false, error: session.message });
-        return;
-      }
-      let uid = session.uid;
-      let username = null;
-      try {
-        // Same page-context transport as sync() — the user-resolution request
-        // must NOT be a SW fetch (fingerprint). The FAB/panel on an IG page
-        // reuses the user's own tab; nothing is closed.
-        username = await withPageTransport(async () => {
-          if (uid) {
-            return (await resolveOwnUser(null, session, uid)).username;
-          }
-          throw new IgApiError('not-logged-in', 'Não encontrei seu ID de usuário. Abra instagram.com logado.');
-        });
-      } catch (err) {
-        sendResponse({
-          ok: false,
-          error: err instanceof IgApiError ? err.message : String(err && err.message || err),
-        });
-        return;
-      }
-      if (uid) await setState({ ownUserId: String(uid) });
-      if (username) await setState({ ownUsername: username });
-      sendResponse({ ok: !!(uid && username), username: username || null, uid: uid ? String(uid) : null });
+      sendResponse({ ok: false, error: 'Abra instagram.com uma vez para o FollowGuard identificar seu perfil.' });
     })();
     return true;
   }
