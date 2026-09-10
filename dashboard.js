@@ -238,10 +238,17 @@ function manualSyncCooldownMsLocal() {
 }
 
 function manualCooldownRemaining() {
-  if (state.status !== 'ok' || !state.lastSyncAt) return 0;
-  if (state.freeManualRefresh) return 0;
-  const elapsed = Date.now() - new Date(state.lastSyncAt).getTime();
-  return Math.max(0, manualSyncCooldownMsLocal() - elapsed);
+  // Mirror of background.js sync()'s manual gate (hunt V2 r2): error status
+  // is gated on lastAttemptAt with the 5-min floor (no free-refresh escape);
+  // success keeps the list-scaled cooldown + one free refresh.
+  const failed = state.status === 'error';
+  if (!failed && state.status !== 'ok') return 0;
+  const anchor = failed ? state.lastAttemptAt : state.lastSyncAt;
+  if (!anchor) return 0;
+  if (!failed && state.freeManualRefresh) return 0;
+  const elapsed = Date.now() - new Date(anchor).getTime();
+  const cdMs = failed ? 5 * 60 * 1000 : manualSyncCooldownMsLocal();
+  return Math.max(0, cdMs - elapsed);
 }
 
 function formatCooldownWait(ms) {
@@ -283,7 +290,14 @@ function renderHeader() {
       pill.classList.add('err');
       t.textContent = state.incomplete ? 'incompleto' : 'erro';
       break;
-    case 'idle': t.textContent = 'aguardando'; break;
+    case 'idle':
+      t.textContent = 'aguardando';
+      // Hunt V4 (O-5): the post-0.6.4 default is DORMANT — explain it, so
+      // "nothing happens" is never mistaken for a broken extension.
+      t.title = settings.consentAt
+        ? 'Sincroniza sozinha apenas com uma aba do Instagram aberta'
+        : 'O FollowGuard só sincroniza quando você clica em ↻ (primeiro clique = consentimento)';
+      break;
     default: t.textContent = state.status;
   }
   el.lastSync().textContent = `última: ${relTime(state.lastSyncAt)}`;

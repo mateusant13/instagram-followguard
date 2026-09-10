@@ -25,7 +25,10 @@ const DEFAULT_SETTINGS = {
   // session cookie (ds_user_id -> /api/v1/users/{pk}/info/). Never hardcode.
   refreshMinutes: 180,
   notificationsEnabled: true,
-  autoSync: true,
+  // Hunt precaution (owner registry: "no auto-sync/refetch without owner OK"):
+  // background sync is OFF unless the user turns it on deliberately. With it
+  // off, the ONLY IG contact is an explicit ↻ click.
+  autoSync: false,
   consentAt: null,
 };
 
@@ -130,6 +133,7 @@ const emptyState = () => ({
   status: 'idle', // idle | syncing | ok | error
   trigger: null,
   lastSyncAt: null,
+  lastAttemptAt: null, // EVERY sync attempt (success or failure) — cooldown ref for the error path
   lastDurationMs: null,
   error: null,
   ownUsername: null,
@@ -143,7 +147,13 @@ const emptyState = () => ({
 
 async function getSettings() {
   const o = await chrome.storage.local.get(K.settings);
-  return { ...DEFAULT_SETTINGS, ...(o[K.settings] || {}) };
+  const s = { ...DEFAULT_SETTINGS, ...(o[K.settings] || {}) };
+  // Hunt V5 (O-6): migrate pre-0.6.4 stored cadences (30/60 min) to the 3h
+  // floor AT THE BOUNDARY, so the UI select, the alarm, and storage can
+  // never disagree (the select has no <option> below 180 anymore).
+  const rm = Number(s.refreshMinutes);
+  if (!Number.isFinite(rm) || rm < 180) s.refreshMinutes = 180;
+  return s;
 }
 
 async function saveSettings(s) {
@@ -637,42 +647,45 @@ async function sync(trigger) {
       // recorded ONLY on an explicit user action (a manual sync from the
       // dashboard — the button IS the consent gesture). Automatic triggers
       // without consent skip entirely.
-      const autoConsent = false;
+      const settings0 = await getSettings();
       if (trig === 'manual') {
         const stCd = await getState();
-        // Hunt V2: the cooldown gate used to apply ONLY when status==='ok',
-        // so after a FAILED sync every dashboard reopen restarted a whole
-        // walk (each failure left lastSyncAt stale-but-recent and no gate).
-        // Cooldown now applies to every terminal status — a failed sync
-        // also recently touched Instagram.
-        if (stCd.status === 'ok' || stCd.status === 'error') {
-          const hadFree = !!stCd.freeManualRefresh;
-          const cd = manualSyncCooldownInfo(stCd.lastSyncAt, {
-            followersCount: stCd.followersCount,
-            followingCount: stCd.followingCount,
-            freeRefreshPending: hadFree,
-          });
-          if (cd.blocked) {
-            return {
-              ok: false,
-              skipped: 'cooldown',
-              waitMinutes: cd.waitMinutes,
-              nextSyncAt: cd.nextSyncAt,
-            };
-          }
-          if (hadFree) await setState({ freeManualRefresh: false });
+        // Hunt V2 (r2): the gate applies to BOTH terminal statuses, with the
+        // right anchor and scale for each. After a FAILURE the anchor is
+        // lastAttemptAt (stamped at every sync start AND in the catch) and
+        // the scale is the minimal 5 min (counters 0): reopen-spam cannot
+        // restart walks, and one network hiccup never locks the user out for
+        // the PREVIOUS success's (up to 45 min) cooldown. After SUCCESS the
+        // full list-scaled cooldown applies, with the one free-refresh
+        // escape hatch consumed here and re-granted only by a real success.
+        const failed = stCd.status === 'error';
+        const anchor = failed ? stCd.lastAttemptAt : stCd.lastSyncAt;
+        const hadFree = !failed && !!stCd.freeManualRefresh;
+        const cd = manualSyncCooldownInfo(anchor, {
+          followersCount: failed ? 0 : stCd.followersCount,
+          followingCount: failed ? 0 : stCd.followingCount,
+          freeRefreshPending: hadFree,
+        });
+        if (cd.blocked) {
+          return {
+            ok: false,
+            skipped: 'cooldown',
+            waitMinutes: cd.waitMinutes,
+            nextSyncAt: cd.nextSyncAt,
+          };
         }
+        if (hadFree) await setState({ freeManualRefresh: false });
       }
-      if (!settings0.consentAt && !autoConsent && trig !== 'manual') {
+      if (!settings0.consentAt && trig !== 'manual') {
         return { ok: false, skipped: 'no-consent' };
       }
-      if (!settings0.consentAt && (trig === 'manual' || autoConsent)) {
+      if (!settings0.consentAt && trig === 'manual') {
         await saveSettings({ ...settings0, consentAt: Date.now() });
       }
       // Cancel any pending auto-retry — a fresh manual/alarm attempt supersedes it.
       await chrome.alarms.clear(RETRY_ALARM);
       await chrome.alarms.clear(CONTINUE_ALARM);
-      await setState({ status: 'syncing', trigger: trig, error: null, syncProgress: null });
+      await setState({ status: 'syncing', trigger: trig, error: null, syncProgress: null, lastAttemptAt: nowIso() });
       await pinSyncTab(true, { hint: true });
       return await withPageTransport(async () => {
       const session = await readSession().catch((err) => err);
@@ -833,7 +846,7 @@ async function sync(trigger) {
       const msg = err instanceof IgApiError ? err.message : String(err && err.message || err).slice(0, 200);
       const code = err instanceof IgApiError ? err.code : null;
       const incomplete = code === 'limit' || code === 'incomplete';
-      await setState({ status: 'error', error: msg, syncProgress: null, errorCode: code, incomplete });
+      await setState({ status: 'error', error: msg, syncProgress: null, errorCode: code, incomplete, lastAttemptAt: nowIso() });
       scheduleErrorRetry(code); // transient only — login/checkpoint/gate never auto-retry
       return { ok: false, error: msg };
     } finally {
@@ -987,16 +1000,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   await scheduleAlarm();
-  if (details.reason === 'install') {
-    const s = await getSettings();
-    if (!s.consentAt) await saveSettings({ ...s, consentAt: Date.now() });
-    // Do not open instagram.com or start sync on install — user opens IG when ready.
-  }
+  // Hunt V4 (O-4): installing is NOT consent. consentAt stays null until the
+  // user's first explicit sync from the dashboard. Nothing automatic touches
+  // Instagram before that, and no tab is opened on install either.
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await scheduleAlarm();
   const meta = (await chrome.storage.local.get(PART_META))[PART_META];
+  const hasPartials = !!(meta && meta.keys && meta.keys.length);
   if (hasPartials) {
     // Resume is an automatic sync: same tab gate as alarms — without it
     // ensureIgTab() would open instagram.com by itself on browser boot.
