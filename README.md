@@ -41,6 +41,27 @@ Veja **quem não te segue de volta** no Instagram e receba aviso quando alguém 
    Pode **apagar o `.zip`** depois de extrair.  
    A **pasta da extensão precisa continuar no computador** — o navegador lê os arquivos dela direto. **Não apague** essa pasta enquanto estiver usando o FollowGuard.
 
+### Instalação automática (silenciosa, via script)
+
+Para instalar/atualizar sem tocar no navegador na mão, use o instalador
+UIA do VOD.RIP — documentado completo em
+`I:/!manager/playbooks/extension-auto-install.md`. Resumo:
+
+```powershell
+# 1. stage os arquivos na pasta fixa (o caminho É a identidade da extensão)
+cp <repo>/{background.js,content.js,content_proxy.js,dashboard.js,dashboard.css,friendship_hook.js,friendship_watch.js,ig_api.mjs,manifest.json,panel.html,popup.html} "<pasta-descompactada>/"
+
+# 2. instala (idempotente — detecta instalado via Secure Preferences)
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  "...\VOD.RIP\backend\scripts\cookie_extension_auto_install.ps1" `
+  -ExtensionDir "<pasta-descompactada>"
+
+# 3. recarrega sem janela (basta o runtime; sem backend use o bootstrap):
+powershell -NoProfile -ExecutionPolicy Bypass -File I:\!extensaoinstagram\reload-followguard.ps1
+```
+
+Zero clique, zero teclado, zero foco roubado; stdout = 1 linha JSON `{ok,installed,extension_id}`.
+
 ## Quanto tempo demora?
 
 Depende de **quantas pessoas** você segue e **quantos te seguem**. Quanto maior a conta, mais demora — é normal.
