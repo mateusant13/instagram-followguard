@@ -633,8 +633,11 @@ async function sync(trigger) {
     const t0 = Date.now();
     const trig = trigger || 'manual';
     try {
-      const settings0 = await getSettings();
-      const autoConsent = ['install', 'startup', 'alarm', 'resume', 'continue', 'retry'].includes(trig);
+      // Hunt V4: triggers must never grant consent for the user. Consent is
+      // recorded ONLY on an explicit user action (a manual sync from the
+      // dashboard — the button IS the consent gesture). Automatic triggers
+      // without consent skip entirely.
+      const autoConsent = false;
       if (trig === 'manual') {
         const stCd = await getState();
         // Hunt V2: the cooldown gate used to apply ONLY when status==='ok',
