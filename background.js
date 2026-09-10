@@ -637,7 +637,12 @@ async function sync(trigger) {
       const autoConsent = ['install', 'startup', 'alarm', 'resume', 'continue', 'retry'].includes(trig);
       if (trig === 'manual') {
         const stCd = await getState();
-        if (stCd.status === 'ok') {
+        // Hunt V2: the cooldown gate used to apply ONLY when status==='ok',
+        // so after a FAILED sync every dashboard reopen restarted a whole
+        // walk (each failure left lastSyncAt stale-but-recent and no gate).
+        // Cooldown now applies to every terminal status — a failed sync
+        // also recently touched Instagram.
+        if (stCd.status === 'ok' || stCd.status === 'error') {
           const hadFree = !!stCd.freeManualRefresh;
           const cd = manualSyncCooldownInfo(stCd.lastSyncAt, {
             followersCount: stCd.followersCount,
