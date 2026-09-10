@@ -82,10 +82,16 @@ export function processSyncSnapshot({
 }
 
 
-/** Dynamic manual-sync cooldown (ms) — scales with list size. */
+/** Dynamic manual-sync cooldown (ms) — scales with list size.
+ * Anti-footgun design (owner: the user is a layperson and must not be able to
+ * spam the account into a gate): after a SUCCESS the wait is list-scaled with
+ * a deliberately high ceiling for huge accounts (40k+ users -> ~2h), because
+ * nothing a layperson does changes faster than the lists themselves. A short
+ * 5-min floor still covers fresh accounts so early retry-happiness is capped.
+ */
 export function manualSyncCooldownMs(followersCount = 0, followingCount = 0) {
   const total = Math.max(0, Number(followersCount) || 0) + Math.max(0, Number(followingCount) || 0);
-  const minutes = Math.min(45, Math.max(5, 5 + Math.floor(total / 500)));
+  const minutes = Math.min(120, Math.max(10, 10 + Math.floor(total / 300)));
   return minutes * 60 * 1000;
 }
 

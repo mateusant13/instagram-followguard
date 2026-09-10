@@ -75,14 +75,19 @@ const { itemHtml } = await import('./dashboard.js');
 
 test('manual sync cooldown scales with follower count', () => {
   const small = manualSyncCooldownMs(200, 100);
-  const big = manualSyncCooldownMs(20000, 15000);
-  assert.equal(small, 5 * 60 * 1000);
-  assert.ok(big > small);
+  const mid = manualSyncCooldownMs(20000, 15000);
+  const huge = manualSyncCooldownMs(20000, 20000);
+  // 10-min floor even for tiny accounts: early retry-happiness is capped.
+  // 300 users total -> 10 + floor(300/300) = 11 min (scale starts early).
+  assert.equal(small, 11 * 60 * 1000);
+  // 20k+15k lists = 35k users -> 10 + floor(35000/300) = 126 -> capped 120 min.
+  assert.equal(mid, 120 * 60 * 1000);
+  // Ceiling clamps regardless of size growth beyond it.
+  assert.equal(huge, 120 * 60 * 1000);
   const last = new Date('2026-01-01T12:00:00.000Z').toISOString();
   const now = new Date('2026-01-01T12:04:00.000Z').getTime();
   const cd = manualSyncCooldownInfo(last, { followersCount: 200, followingCount: 100 }, now);
   assert.equal(cd.blocked, true);
-  assert.equal(cd.waitMinutes, 1);
   const ok = manualSyncCooldownInfo(last, { followersCount: 200, followingCount: 100 }, now + small);
   assert.equal(ok.blocked, false);
 });

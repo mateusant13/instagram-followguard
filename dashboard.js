@@ -232,8 +232,9 @@ function getLists() {
 
 
 function manualSyncCooldownMsLocal() {
+  // Mirror of background.js manualSyncCooldownMs — keep both in lockstep.
   const total = (Number(state.followersCount) || 0) + (Number(state.followingCount) || 0);
-  const minutes = Math.min(45, Math.max(5, 5 + Math.floor(total / 500)));
+  const minutes = Math.min(120, Math.max(10, 10 + Math.floor(total / 300)));
   return minutes * 60 * 1000;
 }
 
