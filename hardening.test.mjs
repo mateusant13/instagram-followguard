@@ -45,7 +45,7 @@ globalThis.document = {
 };
 globalThis.parent = { postMessage() {} };
 
-const { deleteAllData, manualSyncCooldownInfo, manualSyncCooldownMs, recordManualUnfollowMaps, restoreListsAfterFailedWalk } = await import('./background.js');
+const { deleteAllData, manualSyncCooldownInfo, manualSyncCooldownMs, recordManualUnfollowMaps, restoreListsAfterFailedWalk, shouldReuseFollowingList, FOLLOWING_REUSE_MAX_AGE_MS } = await import('./background.js');
 
 test('delete-all wipes every igf.* key incl. resume.* and resets defaults', async () => {
   Object.assign(store, {
@@ -145,4 +145,78 @@ test('itemHtml escapes full_name XSS payload in text and title', () => {
   assert.match(html, /&quot;&gt;&lt;img src=x&gt;/);
   assert.doesNotMatch(html, /title=""><img/);
   assert.doesNotMatch(html, /<span title=""><img/);
+});
+
+// --- v0.6.5 following-reuse gate: pure decision matrix ----------------------
+// Mirror of shouldReuseFollowingList (background.js). Every signal must be
+// present and agree, or sync() walks the `following` list (fail closed).
+const REUSE_NOW = Date.parse('2026-01-08T12:00:00.000Z');
+const REUSE_DAY = 24 * 60 * 60 * 1000;
+const walkedAgo = (ms) => new Date(REUSE_NOW - ms).toISOString();
+// Steady state: same account, declared 20000 === stored 20000, walk 2h old.
+const REUSE_OK = {
+  snapshotUid: '42',
+  currentUid: '42',
+  followingWalkedAt: walkedAgo(2 * 60 * 60 * 1000),
+  declaredFollowingCount: 20000,
+  storedFollowingSize: 20000,
+  now: REUSE_NOW,
+};
+const gate = (over) => shouldReuseFollowingList({ ...REUSE_OK, ...over });
+
+test('following-reuse gate: all signals agree -> reuse; exact 7d boundary inclusive', () => {
+  assert.equal(FOLLOWING_REUSE_MAX_AGE_MS, 7 * REUSE_DAY);
+  assert.equal(gate(), true);
+  // uid comparison normalizes types (IG pks arrive as numbers elsewhere).
+  assert.equal(gate({ snapshotUid: 42, currentUid: '42' }), true);
+  // Number() coercion at the seam: a numeric-string declared count still
+  // matches an equal stored size (exact value match, not string identity).
+  assert.equal(gate({ declaredFollowingCount: '20000' }), true);
+  assert.equal(gate({ followingWalkedAt: walkedAgo(7 * REUSE_DAY) }), true, 'age == maxAgeMs still reuses');
+});
+
+test('following-reuse gate: one ms past the window walks', () => {
+  assert.equal(gate({ followingWalkedAt: walkedAgo(7 * REUSE_DAY + 1) }), false, 'age > 7d must re-walk');
+  assert.equal(gate({ followingWalkedAt: walkedAgo(8 * REUSE_DAY) }), false);
+});
+
+test('following-reuse gate: declared count must equal stored size exactly', () => {
+  assert.equal(gate({ declaredFollowingCount: 20003 }), false, 'IG says 20003, we hold 20000 -> unwatched change -> walk');
+  assert.equal(gate({ declaredFollowingCount: 19999 }), false, 'off-by-one has no slack');
+  assert.equal(gate({ storedFollowingSize: 20001 }), false);
+  // A missing/unparseable declared count is unverifiable -> walk. (null
+  // coerces to 0 and can never match a non-empty stored map.)
+  assert.equal(gate({ declaredFollowingCount: null }), false);
+  assert.equal(gate({ declaredFollowingCount: undefined }), false);
+  assert.equal(gate({ declaredFollowingCount: 'many' }), false);
+  assert.equal(gate({ declaredFollowingCount: -5 }), false);
+  // Non-integer / negative stored size is malformed state -> walk.
+  assert.equal(gate({ storedFollowingSize: -1 }), false);
+  assert.equal(gate({ storedFollowingSize: 2.5 }), false);
+  assert.equal(gate({ storedFollowingSize: Number.NaN }), false);
+});
+
+test('following-reuse gate: missing walk timestamp and account switch walk', () => {
+  // Legacy state / last walk never completed: no usable timestamp at all.
+  assert.equal(gate({ followingWalkedAt: null }), false);
+  assert.equal(gate({ followingWalkedAt: undefined }), false);
+  assert.equal(gate({ followingWalkedAt: '' }), false);
+  assert.equal(gate({ followingWalkedAt: 'garbage' }), false, 'unparseable timestamp is not a fresh walk');
+  assert.equal(gate({ now: Number.NaN }), false, 'unparseable now -> walk');
+  // Different / absent account: the stored map is not this account's.
+  assert.equal(gate({ currentUid: '43' }), false);
+  assert.equal(gate({ snapshotUid: null }), false, 'fresh baseline has no trustworthy snapshot');
+  assert.equal(gate({ snapshotUid: '' }), false);
+  assert.equal(gate({ currentUid: null }), false);
+});
+
+test('following-reuse gate: malformed maxAgeMs disables reuse rather than trusting it', () => {
+  assert.equal(gate({ maxAgeMs: '7d' }), false);
+  assert.equal(gate({ maxAgeMs: 0 }), false);
+  assert.equal(gate({ maxAgeMs: -1 }), false);
+  assert.equal(gate({ maxAgeMs: Number.NaN }), false);
+  assert.equal(gate({ maxAgeMs: Number.POSITIVE_INFINITY }), false, 'an unbounded window is never a safe cache');
+  // A valid custom window is honoured on both sides of the boundary.
+  assert.equal(gate({ maxAgeMs: 3 * 60 * 60 * 1000 }), true, '2h walk inside a 3h window');
+  assert.equal(gate({ maxAgeMs: 60 * 60 * 1000 }), false, '2h walk past a 1h window');
 });

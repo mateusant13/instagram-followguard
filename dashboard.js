@@ -339,6 +339,14 @@ function renderSyncHint() {
         '<strong>Não feche a aba do Instagram</strong> enquanto sincroniza. ' +
         'A aba pode ficar em segundo plano — não precisa estar em foco.';
     }
+  } else if (state.followingReused) {
+    // v0.6.4 bounded reuse: the "Seguindo" list came straight from storage
+    // (gate in background.js shouldReuseFollowingList). One line, on the
+    // existing hint node — never a new DOM element.
+    hint.style.display = 'block';
+    hint.innerHTML =
+      '<strong>Lista "Seguindo" reaproveitada</strong> — como as suas ações são registradas na hora, ' +
+      'ela não foi buscada de novo (mais rápido e com menos requisições); a busca completa volta em até 7 dias.';
   } else {
     hint.style.display = 'none';
   }

@@ -118,6 +118,62 @@ export function manualSyncCooldownInfo(lastSyncAt, opts = {}, now = Date.now()) 
   };
 }
 
+/** Reuse window for the `following` walk (7 days). Long enough that a normal
+ * weekly check-in costs one following walk per week instead of one per sync;
+ * short enough that even a fully unwatched account is re-walked regularly. */
+export const FOLLOWING_REUSE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Pure reuse gate: may sync() skip the `following` walk and trust the stored
+ * map? Exported as the tested decision seam.
+ *
+ * WHY this is safe where a generic cache would not be: the `following` map is
+ * already kept current for every change the USER makes in an IG tab —
+ * friendship_hook.js / friendship_watch.js intercept our own follow /
+ * unfollow / remove_follower calls and recordFriendshipAction() rewrites
+ * K.following live. The drift a reuse window can still hide is therefore
+ * narrow: following done where no extension tab could watch it (mobile app,
+ * another browser) AND a declared count Instagram has not yet updated.
+ *
+ * Every signal must be present and agree, or we walk (fail closed):
+ *   1. same account (snapshotUid === currentUid, both non-null) — a fresh
+ *      baseline or a switched account has no trustworthy stored map;
+ *   2. a prior SUCCESSFUL walk timestamp (followingWalkedAt) — legacy state
+ *      without the field, or a state whose last walk never completed, walks;
+ *   3. declared followingCount === stored map size — EXACT, no slack. IG says
+ *      20003 and we hold 20000 → something changed unwatched → walk. A
+ *      missing/unparseable declared count is unverifiable → walk;
+ *   4. age of that walk <= maxAgeMs.
+ * A non-positive / non-finite maxAgeMs disables reuse rather than trusting a
+ * negative window.
+ */
+export function shouldReuseFollowingList({
+  snapshotUid,
+  currentUid,
+  followingWalkedAt,
+  declaredFollowingCount,
+  storedFollowingSize,
+  now = Date.now(),
+  maxAgeMs = FOLLOWING_REUSE_MAX_AGE_MS,
+} = {}) {
+  const cur = curUid(currentUid);
+  const stored = curUid(snapshotUid);
+  if (!cur || !stored || stored !== cur) return false;
+
+  const declared = Number(declaredFollowingCount);
+  const size = Number(storedFollowingSize);
+  if (!Number.isFinite(declared) || declared < 0) return false;
+  if (!Number.isInteger(size) || size < 0) return false;
+  if (declared !== size) return false;
+
+  if (typeof maxAgeMs !== 'number' || !Number.isFinite(maxAgeMs) || maxAgeMs <= 0) return false;
+  if (followingWalkedAt == null || followingWalkedAt === '') return false;
+  const walkedAt = new Date(followingWalkedAt).getTime();
+  const t = Number(now);
+  if (!Number.isFinite(walkedAt) || !Number.isFinite(t)) return false;
+  return t - walkedAt <= maxAgeMs;
+}
+
 /** Apply a user-initiated unfollow to persisted maps (tests + runtime). */
 export function recordManualUnfollowMaps(followingObj, followersObj, { pk, username } = {}) {
   const result = applyManualUnfollow(followingObj, followersObj, { pk, username });
@@ -148,6 +204,12 @@ const emptyState = () => ({
   followingCount: 0,
   notFollowingBackCount: 0,
   incomplete: false, // true when a list was truncated by the page cap
+  // ISO timestamp of the last sync that WALKED `following` to completion
+  // (never stamped by a reuse or a failure) — the reuse gate's age signal.
+  followingWalkedAt: null,
+  // true when the last completed sync reused the stored `following` map
+  // instead of walking it — drives the one-line dashboard hint.
+  followingReused: false,
   freeManualRefresh: false, // one free manual refresh after each successful sync
 });
 
@@ -730,6 +792,11 @@ async function sync(trigger) {
         following: Number.isFinite(info.followingCount) ? info.followingCount : null,
         followers: Number.isFinite(info.followerCount) ? info.followerCount : null,
       };
+      // NOTE (reuse): when `following` is reused there is deliberately NO
+      // following-side completeness check to run — the walk never happened, so
+      // there is nothing to compare against the declared count. The gate below
+      // already demanded declaredFollowingCount === stored map size, which is
+      // the same signal the oracle would have checked, so this is not a hole.
       const listOpts = (kind, resume) => ({
         signal: listAbort.signal,
         resume,
@@ -744,11 +811,40 @@ async function sync(trigger) {
       // the displayed baseline (a SW death mid-walk can still leave them
       // short until the next completed sync; the diff/notify path reads
       // prevFollowers, which only a COMPLETE walk ever writes).
-      const prewalk = await chrome.storage.local.get([K.followers, K.following]);
+      const prewalk = await chrome.storage.local.get([K.followers, K.following, K.snapshotUid]);
+      // --- bounded `following` reuse (see shouldReuseFollowingList) ---
+      // The following walk is the one list whose data is already authoritative
+      // while it sits in storage: our own follow/unfollow/remove_follower
+      // actions are intercepted live by friendship_hook.js and applied to
+      // K.following by recordFriendshipAction(). So a 20k account that syncs
+      // several times a day does not have to re-walk ~830 pages of `following`
+      // every time — ONLY when the gate's signals all agree.
+      // `followers` is NEVER reused or shortened: other people's actions have
+      // no local signal, so it is walked in full on every sync.
+      const partials0 = await readPartials(uid);
+      const reuseFollowing = !partials0.following && !partials0.followers && shouldReuseFollowingList({
+        // Fresh baseline / switched account => no snapshotUid (or a different
+        // one) => gate fails closed, exactly as rule 1 requires.
+        snapshotUid: prewalk[K.snapshotUid] ?? null,
+        currentUid: uid,
+        followingWalkedAt: st0.followingWalkedAt ?? null,
+        declaredFollowingCount: info.followingCount,
+        storedFollowingSize: Object.keys(prewalk[K.following] || {}).length,
+      });
+      // Resume partials present (either list) means the last sync never
+      // finished cleanly: walk BOTH lists so the state stops being inherited,
+      // and let the existing checkpoint resume do its job for `following`.
       let following;
       let followers;
       try {
-        following = await fetchListComplete('following', uid, session, listOpts, readPartials);
+        if (reuseFollowing) {
+          // No `following` request at all — the stored object IS the walk
+          // result, in the exact Map shape fetchAllUsers returns.
+          following = new Map(Object.entries(prewalk[K.following] || {}));
+        } else {
+          following = await fetchListComplete('following', uid, session, listOpts, readPartials);
+        }
+        // ALWAYS walked, in full, first page to last cursor.
         followers = await fetchListComplete('followers', uid, session, listOpts, readPartials);
       } catch (err) {
         listAbort.abort();
@@ -806,12 +902,15 @@ async function sync(trigger) {
 
       const persist = {
         [K.followers]: Object.fromEntries(followers),
-        [K.following]: Object.fromEntries(following),
         [K.prevFollowers]: Object.fromEntries(followers),
         [K.history]: snapshot.newHistory,
         [K.events]: allEvents,
         [K.newFollowers]: allNewFollowers,
       };
+      // Reuse: the stored map is byte-for-byte what we just used as `following`
+      // (built from it, and nothing wrote K.following during this sync) — so
+      // skip the 20k-key rewrite. It is the whole point of the reuse path.
+      if (!reuseFollowing) persist[K.following] = Object.fromEntries(following);
       if (snapshot.snapshotUid) persist[K.snapshotUid] = snapshot.snapshotUid;
       await chrome.storage.local.set(persist);
       await clearPartials(); // sync complete — no resume needed anymore
@@ -845,6 +944,11 @@ async function sync(trigger) {
         incomplete: expected.following == null || expected.followers == null,
         retryN: 0,
         freeManualRefresh: true,
+        followingReused: reuseFollowing,
+        // Only a REAL completed walk re-stamps the age signal. On reuse the
+        // original timestamp must survive untouched, or the 7-day window would
+        // slide forward forever and the list would never be re-walked.
+        ...(reuseFollowing ? {} : { followingWalkedAt: nowIso() }),
       });
       return { ok: true, following: following.size, followers: followers.size, notFollowingBack: notFollowingBack.length, newEvents: snapshot.events.length };
       });

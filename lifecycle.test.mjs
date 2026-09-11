@@ -9,6 +9,29 @@ import assert from 'node:assert/strict';
 const store = new Map();
 const getC = (k) => (store.has(k) ? JSON.parse(JSON.stringify(store.get(k))) : undefined);
 
+// Page-transport lane for the v0.6.5 reuse tests: a fake IG tab let
+// ensureIgTab drive the REAL pageTransport, which turns every IG request
+// into a chrome.tabs.sendMessage({igf:'fetch', path}) — where we record the
+// path. The lane is inert by default (igTabs/cookieJar empty, no proxy
+// script), so the dormant-path tests below keep their exact semantics —
+// including the tabs.create tripwire.
+const FAKE_TAB_ID = 4242;
+let igTabs = [];
+let cookieJar = [];
+let proxyScript = null; // (path) => {ok,status,text}; unset answers ok-empty
+const requestedPaths = [];
+async function proxyMessage(tabId, msg) {
+  if (!msg || !msg.igf || tabId !== FAKE_TAB_ID) throw new Error('no listener');
+  if (msg.igf === 'sync-hint') return {};
+  if (msg.igf === 'ping') return { pong: true, version: chrome.runtime.getManifest().version };
+  if (msg.igf === 'fetch') {
+    requestedPaths.push(msg.path);
+    const r = proxyScript ? proxyScript(msg.path) : undefined;
+    return r ?? { ok: true, status: 200, text: JSON.stringify({ status: 'ok', users: [] }) };
+  }
+  throw new Error('no listener');
+}
+
 let startupCb = null;
 let messageCb = null;
 
@@ -61,10 +84,10 @@ globalThis.chrome = {
     // NO IG tab exists: any code path that forgets the gate and calls
     // ensureIgTab would reach create() below and trip the assertion instead
     // of silently opening a tab.
-    async query() { return []; },
+    async query() { return igTabs.slice(); },
     async create() { throw new Error('REGRESSION: extension opened an IG tab automatically'); },
     async get() { throw new Error('no tab'); },
-    async sendMessage() { throw new Error('no listener'); },
+    async sendMessage(tabId, msg) { return proxyMessage(tabId, msg); },
     async update() {},
     async remove() {},
     onRemoved: { addListener() {} },
@@ -79,7 +102,7 @@ globalThis.chrome = {
     onClicked: { addListener() {} },
   },
   cookies: {
-    async getAll() { return []; }, // no session -> readSession yields ds_user_id-only session
+    async getAll() { return cookieJar.slice(); }, // default: no session -> sync fails honest
   },
   action: {
     async setBadgeText() {},
@@ -147,4 +170,128 @@ test('getSettings migrates stored 30/60 cadences to the 180 floor (O-6)', async 
   assert.ok(syncAlarms.length >= 1, 'consented autoSync must arm the alarm');
   const period = syncAlarms[syncAlarms.length - 1].info.periodInMinutes;
   assert.ok(period >= 180, `alarm floored to >=180 min, got ${period}`);
+});
+
+// --- v0.6.5 bounded `following` reuse: sync-level proof ---------------------
+// The tests above proved sync() survives while dormant. These drive the REAL
+// onMessage -> sync() path end-to-end: a logged-in session, a user-owned IG
+// tab that answers the ping (so tabs.create — the tripwire above — is never
+// reached), and the page transport recording every requested endpoint path.
+// The reuse decision must be visible in the TRAFFIC: zero `following`
+// requests when the gate holds, and `followers` walked in full either way.
+const { __setPageDelayMsForTests, __setRetryBaseMsForTests } = await import('./ig_api.mjs');
+__setPageDelayMsForTests(0); // no human inter-page sleeps in a test run
+__setRetryBaseMsForTests(1); // transient backoff: 30-240s ladder -> 1ms
+
+const R_UID = '42';
+const rUser = (n) => ({ pk: String(n), username: `u${n}`, full_name: `U ${n}` });
+// Stored baseline: exactly two followed accounts.
+const R_STORED_FOLLOWING = { u1: rUser(1), u2: rUser(2) };
+// Age signal 2h old — inside the 7d window: the reuse gate's ONLY variable
+// across these two tests is the declared-vs-stored count.
+const R_WALKED_AT = new Date(Date.now() - 2 * 3600000).toISOString();
+const followingReq = (p) => p.startsWith(`/api/v1/friendships/${R_UID}/following/`);
+const followersReq = (p) => p.startsWith(`/api/v1/friendships/${R_UID}/followers/`);
+
+function seedReuseSync({ declaredFollowing }) {
+  store.clear();
+  requestedPaths.length = 0;
+  store.set('igf.settings', {
+    refreshMinutes: 180, notificationsEnabled: false, autoSync: false,
+    consentAt: Date.now() - 86400000,
+  });
+  // status idle + no lastSyncAt -> the manual cooldown never blocks; the only
+  // gate decided in this sync is the reuse gate itself.
+  store.set('igf.state', { status: 'idle', followingWalkedAt: R_WALKED_AT });
+  store.set('igf.following', R_STORED_FOLLOWING);
+  store.set('igf.followers', {});
+  store.set('igf.snapshotUid', R_UID);
+  cookieJar = [
+    { name: 'sessionid', value: 's3cr3t', domain: '.instagram.com' },
+    { name: 'ds_user_id', value: R_UID, domain: '.instagram.com' },
+    { name: 'csrftoken', value: 'c', domain: '.instagram.com' },
+  ];
+  igTabs = [{ id: FAKE_TAB_ID, active: true }];
+  // IG-side truth: follower_count 2, walked in TWO pages (the full-walk
+  // proof); following declared `declaredFollowing` — the walk, when it
+  // happens, returns 3 accounts (a follow we never recorded locally).
+  proxyScript = (path) => {
+    const ok = (body) => ({ ok: true, status: 200, text: JSON.stringify({ status: 'ok', ...body }) });
+    if (path.startsWith(`/api/v1/users/${R_UID}/info/`)) {
+      return ok({ user: { pk: R_UID, username: 'me', follower_count: 2, following_count: declaredFollowing } });
+    }
+    if (path.startsWith(`/api/v1/friendships/${R_UID}/followers/`)) {
+      return path.includes('max_id=f1')
+        ? ok({ users: [rUser(3)] })
+        : ok({ users: [rUser(4)], next_max_id: 'f1' });
+    }
+    if (path.startsWith(`/api/v1/friendships/${R_UID}/following/`)) {
+      return ok({ users: [rUser(1), rUser(2), rUser(5)] });
+    }
+    return undefined; // unscripted -> ok-empty fallback; path recorder still sees it
+  };
+}
+
+function clearReuseLane() {
+  cookieJar = [];
+  igTabs = [];
+  proxyScript = null;
+}
+
+function runManualSync() {
+  return new Promise((resolve, reject) => {
+    const ok = messageCb({ type: 'igf-sync', trigger: 'manual' }, { id: 'test-ext-id' }, resolve);
+    if (!ok) reject(new Error('handler did not claim async response'));
+  });
+}
+
+test('following reuse: fresh matching map => zero /following/ requests; followers still walked in full', async () => {
+  seedReuseSync({ declaredFollowing: 2 }); // declared === stored size
+  let res;
+  try {
+    res = await runManualSync();
+  } finally {
+    clearReuseLane();
+  }
+  assert.equal(res.ok, true, `sync must complete, got ${JSON.stringify(res)}`);
+  // THE reuse proof, in the traffic itself: the endpoint is never requested.
+  assert.deepEqual(requestedPaths.filter(followingReq), [],
+    `a reused map must cost ZERO requests: ${JSON.stringify(requestedPaths)}`);
+  // `followers` is NEVER reusable: walked first page to last cursor.
+  const fp = requestedPaths.filter(followersReq);
+  assert.equal(fp.length, 2, `followers must be walked in full (both pages): ${JSON.stringify(fp)}`);
+  assert.ok(!fp[0].includes('max_id='), 'followers walk starts from scratch');
+  assert.ok(fp[1].includes('max_id=f1'), 'followers walk follows the cursor to the end');
+  assert.equal(res.following, 2);
+  assert.equal(res.followers, 2);
+  const state = getC('igf.state');
+  assert.equal(state.status, 'ok');
+  assert.equal(state.followingReused, true);
+  assert.equal(state.followingWalkedAt, R_WALKED_AT,
+    'a reuse must NOT slide the age signal forward (the 7d window would never expire)');
+  assert.deepEqual(getC('igf.following'), R_STORED_FOLLOWING,
+    'reuse must skip the stored-map rewrite entirely');
+  assert.deepEqual([...store.keys()].filter((k) => k.startsWith('igf.resume.')), [],
+    'a completed walk leaves no checkpoints behind');
+});
+
+test('following reuse: declared-vs-stored count mismatch => /following/ IS walked and the age signal re-stamps', async () => {
+  seedReuseSync({ declaredFollowing: 3 }); // stored map holds 2 -> unwatched change
+  let res;
+  try {
+    res = await runManualSync();
+  } finally {
+    clearReuseLane();
+  }
+  assert.equal(res.ok, true, `sync must complete, got ${JSON.stringify(res)}`);
+  const fp = requestedPaths.filter(followingReq);
+  assert.equal(fp.length, 1, `one mismatched count must re-walk following (single complete walk): ${JSON.stringify(requestedPaths)}`);
+  assert.equal(res.following, 3, 'the walked list (3 accounts) replaces the stale map');
+  assert.equal(requestedPaths.filter(followersReq).length, 2, 'followers stays fully walked here too');
+  const state = getC('igf.state');
+  assert.equal(state.followingReused, false);
+  assert.ok(state.followingWalkedAt && state.followingWalkedAt !== R_WALKED_AT,
+    'a real completed walk must re-stamp followingWalkedAt');
+  assert.deepEqual(Object.keys(getC('igf.following')).sort(), ['u1', 'u2', 'u5'],
+    'the store must hold the walked list, not the seed');
 });
