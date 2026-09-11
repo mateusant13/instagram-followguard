@@ -70,7 +70,7 @@ globalThis.chrome = {
     onStartup: { addListener: (cb) => { startupCb = cb; } },
     onInstalled: { addListener() {} },
     onConnect: { addListener() {} },
-    getManifest: () => ({ version: '0.6.4' }),
+    getManifest: () => ({ version: '0.6.5' }),
     lastError: null,
   },
   alarms: {

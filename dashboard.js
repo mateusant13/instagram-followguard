@@ -340,7 +340,7 @@ function renderSyncHint() {
         'A aba pode ficar em segundo plano — não precisa estar em foco.';
     }
   } else if (state.followingReused) {
-    // v0.6.4 bounded reuse: the "Seguindo" list came straight from storage
+    // v0.6.5 bounded reuse: the "Seguindo" list came straight from storage
     // (gate in background.js shouldReuseFollowingList). One line, on the
     // existing hint node — never a new DOM element.
     hint.style.display = 'block';
