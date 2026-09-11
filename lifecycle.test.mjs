@@ -184,7 +184,9 @@ __setPageDelayMsForTests(0); // no human inter-page sleeps in a test run
 __setRetryBaseMsForTests(1); // transient backoff: 30-240s ladder -> 1ms
 
 const R_UID = '42';
-const rUser = (n) => ({ pk: String(n), username: `u${n}`, full_name: `U ${n}` });
+const rUser = (n, full = false) => full
+  ? { pk: String(n), username: `u${n}`, full_name: `U ${n}`, is_private: false, is_verified: false, profile_pic_url: '' }
+  : { pk: String(n), username: `u${n}`, full_name: `U ${n}` };
 // Stored baseline: exactly two followed accounts.
 const R_STORED_FOLLOWING = { u1: rUser(1), u2: rUser(2) };
 // Age signal 2h old — inside the 7d window: the reuse gate's ONLY variable
@@ -273,6 +275,31 @@ test('following reuse: fresh matching map => zero /following/ requests; follower
     'reuse must skip the stored-map rewrite entirely');
   assert.deepEqual([...store.keys()].filter((k) => k.startsWith('igf.resume.')), [],
     'a completed walk leaves no checkpoints behind');
+});
+
+test('following reuse: an orphan resume checkpoint vetoes reuse => both lists walked', async () => {
+  // The partials veto lives OUTSIDE the pure gate (background.js sync):
+  // `!partials0.following && !partials0.followers &&` before the gate call.
+  // Seed a stale FOLLOWERS checkpoint — deleting that veto kept the old
+  // suite green while reusing `following` off a half-walked state.
+  seedReuseSync({ declaredFollowing: 2 });
+  store.set('igf.resume.followers.42.0', { maxId: 'f0', at: Date.now(), users: [rUser(9)] });
+  store.set('igf.resume.meta', { keys: ['igf.resume.followers.42.0'] });
+  let res;
+  try {
+    res = await runManualSync();
+  } finally {
+    clearReuseLane();
+  }
+  assert.equal(res.ok, true, `sync must complete, got ${JSON.stringify(res)}`);
+  assert.deepEqual(requestedPaths.filter(followingReq).length > 0, true,
+    'a leftover checkpoint must veto reuse: following IS walked');
+  assert.deepEqual(getC('igf.following'), { u1: rUser(1, true), u2: rUser(2, true), u5: rUser(5, true) },
+    'vetoed reuse rewrites the stored map from the real walk');
+  assert.deepEqual([...store.keys()].filter((k) => k.startsWith('igf.resume.')), [],
+    'a completed walk clears the checkpoints');
+  const state = getC('igf.state');
+  assert.equal(state.followingReused, false, 'vetoed sync is not a reuse');
 });
 
 test('following reuse: declared-vs-stored count mismatch => /following/ IS walked and the age signal re-stamps', async () => {

@@ -160,6 +160,9 @@ export function shouldReuseFollowingList({
   const stored = curUid(snapshotUid);
   if (!cur || !stored || stored !== cur) return false;
 
+  // Number(null)===0 would let a missing declared count satisfy an EMPTY
+  // stored map; a count we never got is unverifiable -> walk (fail closed).
+  if (declaredFollowingCount == null || declaredFollowingCount === '') return false;
   const declared = Number(declaredFollowingCount);
   const size = Number(storedFollowingSize);
   if (!Number.isFinite(declared) || declared < 0) return false;

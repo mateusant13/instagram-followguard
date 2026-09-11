@@ -184,8 +184,11 @@ test('following-reuse gate: declared count must equal stored size exactly', () =
   assert.equal(gate({ declaredFollowingCount: 20003 }), false, 'IG says 20003, we hold 20000 -> unwatched change -> walk');
   assert.equal(gate({ declaredFollowingCount: 19999 }), false, 'off-by-one has no slack');
   assert.equal(gate({ storedFollowingSize: 20001 }), false);
-  // A missing/unparseable declared count is unverifiable -> walk. (null
-  // coerces to 0 and can never match a non-empty stored map.)
+  // null/'' must fail closed even against an EMPTY stored map: Number(null)
+  // coerces to 0 and would otherwise satisfy size 0 exactly.
+  assert.equal(gate({ declaredFollowingCount: null, storedFollowingSize: 0 }), false);
+  assert.equal(gate({ declaredFollowingCount: '', storedFollowingSize: 0 }), false);
+  assert.equal(gate({ declaredFollowingCount: undefined, storedFollowingSize: 0 }), false);
   assert.equal(gate({ declaredFollowingCount: null }), false);
   assert.equal(gate({ declaredFollowingCount: undefined }), false);
   assert.equal(gate({ declaredFollowingCount: 'many' }), false);
