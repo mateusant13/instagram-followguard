@@ -1,10 +1,10 @@
 // IG FollowGuard — backup export/import tests.
 'use strict';
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 const store = {};
-globalThis.chrome = {
+const CHROME_FAKE = {
   alarms: { clear: async () => {}, create: async () => {}, onAlarm: { addListener() {} } },
   storage: {
     onChanged: { addListener() {} },
@@ -32,7 +32,27 @@ globalThis.chrome = {
   notifications: { create: async () => {}, clear: async () => {}, onClicked: { addListener() {} } },
 };
 
-const { exportBackup, importBackup } = await import('./background.js');
+
+// `chrome` must exist ONLY inside this file's test window. Bun evaluates every
+// test file in ONE process over a shared global, so a module-scope assignment
+// leaks into sibling files and pushes their apiFetch calls down the
+// "chrome present -> page transport required" branch (ig_api.mjs), which
+// fail-closes with 'IGF interno: requisição sem transporte de página.'
+// Importing inside before() (rather than a top-level await) additionally keeps
+// module evaluation out of other files' registration windows — resuming a
+// suspended top-level await mid-test makes the file's own `test()` calls throw
+// NotImplementedError (bun#5090). The ?iso= query gives this file its own
+// fresh background.js instance (own listener captures), while its static
+// imports (ig_api.mjs, diff.mjs) stay shared as before.
+let exportBackup;
+let importBackup;
+before(async () => {
+  globalThis.chrome = CHROME_FAKE;
+  ({ exportBackup, importBackup } = await import('./background.js?iso=backup'));
+});
+after(() => {
+  delete globalThis.chrome;
+});
 
 test('exportBackup collects only igf.* keys', async () => {
   Object.keys(store).forEach((k) => delete store[k]);

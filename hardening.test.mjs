@@ -1,10 +1,10 @@
 // IG FollowGuard — delete-all + HTML escaping tests.
 'use strict';
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 const store = {};
-globalThis.chrome = {
+const CHROME_FAKE = {
   alarms: { clear: async () => {}, create: async () => {}, onAlarm: { addListener() {} } },
   storage: {
     onChanged: { addListener() {} },
@@ -32,7 +32,7 @@ globalThis.chrome = {
   tabs: { create: async () => {}, query: async () => [], sendMessage: async () => ({ pong: true }), remove: async () => {}, get: async () => { throw new Error('gone'); } },
 };
 
-globalThis.document = {
+const DOCUMENT_FAKE = {
   getElementById: () => ({
     onclick: null,
     addEventListener() {},
@@ -43,9 +43,37 @@ globalThis.document = {
   addEventListener() {},
   body: { classList: { contains: () => false } },
 };
-globalThis.parent = { postMessage() {} };
+const PARENT_FAKE = { postMessage() {} };
 
-const { deleteAllData, manualSyncCooldownInfo, manualSyncCooldownMs, recordManualUnfollowMaps, restoreListsAfterFailedWalk, shouldReuseFollowingList, FOLLOWING_REUSE_MAX_AGE_MS } = await import('./background.js');
+// chrome/document/parent are confined to this file's test window and both
+// modules are imported from before() — see backup.test.mjs for the full
+// rationale (shared bun process, leaked `chrome` poisoning sibling apiFetch
+// guards; top-level awaits resuming inside sibling registration windows).
+let deleteAllData;
+let manualSyncCooldownInfo;
+let manualSyncCooldownMs;
+let recordManualUnfollowMaps;
+let restoreListsAfterFailedWalk;
+let shouldReuseFollowingList;
+let FOLLOWING_REUSE_MAX_AGE_MS;
+let itemHtml;
+before(async () => {
+  globalThis.chrome = CHROME_FAKE;
+  globalThis.document = DOCUMENT_FAKE;
+  globalThis.parent = PARENT_FAKE;
+  globalThis.__IGF_SKIP_UI_BOOT__ = true;
+  ({
+    deleteAllData, manualSyncCooldownInfo, manualSyncCooldownMs, recordManualUnfollowMaps,
+    restoreListsAfterFailedWalk, shouldReuseFollowingList, FOLLOWING_REUSE_MAX_AGE_MS,
+  } = await import('./background.js?iso=hardening'));
+  ({ itemHtml } = await import('./dashboard.js?iso=hardening'));
+});
+after(() => {
+  delete globalThis.chrome;
+  delete globalThis.document;
+  delete globalThis.parent;
+  delete globalThis.__IGF_SKIP_UI_BOOT__;
+});
 
 test('delete-all wipes every igf.* key incl. resume.* and resets defaults', async () => {
   Object.assign(store, {
@@ -70,8 +98,6 @@ test('delete-all wipes every igf.* key incl. resume.* and resets defaults', asyn
   assert.equal(store['other.key'], 'keep');
 });
 
-globalThis.__IGF_SKIP_UI_BOOT__ = true;
-const { itemHtml } = await import('./dashboard.js');
 
 test('manual sync cooldown scales with follower count', () => {
   const small = manualSyncCooldownMs(200, 100);

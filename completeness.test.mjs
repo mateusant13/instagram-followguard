@@ -2,7 +2,7 @@
 // Root-cause suite for the "só 20 pessoas que não me seguiam" bug: a truncated
 // follow list must NEVER be accepted, persisted, or diffed as complete.
 'use strict';
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fetchAllUsers, apiFetch, IgApiError,
@@ -147,7 +147,7 @@ test('mergeEvents dedupes by username keeping the newest', () => {
 
 // --- (e) fetchListComplete: 'incomplete' propagates without segment-pausing ---
 
-globalThis.chrome = {
+const CHROME_FAKE = {
   alarms: { clear: async () => {}, create: async () => {}, onAlarm: { addListener() {} } },
   storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
   runtime: {
@@ -162,7 +162,20 @@ globalThis.chrome = {
   tabs: { create: async () => {}, query: async () => [], sendMessage: async () => ({ pong: true }), remove: async () => {}, get: async () => { throw new Error('gone'); } },
 };
 
-const { fetchListComplete, resolveOwnUser } = await import('./background.js');
+
+// chrome global confined to this file's test window; background.js imported
+// from before() (see backup.test.mjs for the full rationale). ig_api.mjs stays
+// a shared static import above — its module-level transport is always restored
+// to null by withTransport().
+let fetchListComplete;
+let resolveOwnUser;
+before(async () => {
+  globalThis.chrome = CHROME_FAKE;
+  ({ fetchListComplete, resolveOwnUser } = await import('./background.js?iso=completeness'));
+});
+after(() => {
+  delete globalThis.chrome;
+});
 
 test('fetchListComplete: incomplete rejects immediately (auto-retry owns resume)', async () => {
   let segmentAlarms = 0;

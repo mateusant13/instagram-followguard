@@ -2,7 +2,7 @@
 // suite never executed sync() nor the onStartup/onInstalled listeners, which
 // is exactly how the settings0 / hasPartials ReferenceErrors shipped green.
 // These tests drive the REAL module through the handlers Chrome itself calls.
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 // In-memory chrome.storage.local (JSON round-trip like the real one).
@@ -35,7 +35,7 @@ async function proxyMessage(tabId, msg) {
 let startupCb = null;
 let messageCb = null;
 
-globalThis.chrome = {
+const CHROME_FAKE = {
   storage: {
     local: {
       async get(keys) {
@@ -111,7 +111,19 @@ globalThis.chrome = {
   },
 };
 
-const mod = await import('./background.js');
+
+// chrome global confined to this file's test window; background.js imported
+// from before() (see backup.test.mjs for the full rationale). The fresh
+// ?iso= instance matters here: the fakes above capture the module's
+// onMessage/onStartup callbacks into messageCb/startupCb — a shared module
+// instance would keep the FIRST file's stale listener and its stale lane.
+before(async () => {
+  globalThis.chrome = CHROME_FAKE;
+  await import('./background.js?iso=lifecycle');
+});
+after(() => {
+  delete globalThis.chrome;
+});
 
 test('manual sync without consent proceeds (records consent) and survives no session — no ReferenceError', async () => {
   assert.ok(messageCb, 'onMessage listener must be registered at import');
@@ -179,7 +191,7 @@ test('getSettings migrates stored 30/60 cadences to the 180 floor (O-6)', async 
 // reached), and the page transport recording every requested endpoint path.
 // The reuse decision must be visible in the TRAFFIC: zero `following`
 // requests when the gate holds, and `followers` walked in full either way.
-const { __setPageDelayMsForTests, __setRetryBaseMsForTests } = await import('./ig_api.mjs');
+import { __setPageDelayMsForTests, __setRetryBaseMsForTests } from './ig_api.mjs';
 __setPageDelayMsForTests(0); // no human inter-page sleeps in a test run
 __setRetryBaseMsForTests(1); // transient backoff: 30-240s ladder -> 1ms
 

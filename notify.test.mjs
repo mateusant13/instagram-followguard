@@ -1,10 +1,10 @@
 // IG FollowGuard — notification-path tests with a stubbed chrome global.
 'use strict';
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 const created = [];
-globalThis.chrome = {
+const CHROME_FAKE = {
   alarms: { clear: async () => {}, create: async () => {}, onAlarm: { addListener() {} } },
   storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
   runtime: {
@@ -21,7 +21,19 @@ globalThis.chrome = {
   tabs: { create: async () => {} },
 };
 
-const { notifyUnfollows } = await import('./background.js');
+
+// See backup.test.mjs: `chrome` is confined to this file's test window so it
+// never leaks into sibling files, and background.js is imported from before()
+// to avoid resuming a top-level await inside another file's test registration
+// (bun#5090). ?iso= gives this file a fresh module instance.
+let notifyUnfollows;
+before(async () => {
+  globalThis.chrome = CHROME_FAKE;
+  ({ notifyUnfollows } = await import('./background.js?iso=notify'));
+});
+after(() => {
+  delete globalThis.chrome;
+});
 
 test('single unfollows produce one notification each with profile text', async () => {
   created.length = 0;

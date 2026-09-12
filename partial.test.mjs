@@ -1,16 +1,29 @@
 // IG FollowGuard — checkpoint/resume + error-classification unit tests.
 'use strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildResume, RESUME_TTL_MS, fetchAllUsers, IgApiError, apiFetch,
   __setRetryBaseMsForTests, __setFetchTimeoutMsForTests, __setPageDelayMsForTests, __setTransport,
+  __setMaxPagesForTests,
 } from './ig_api.mjs';
 
 // Test seams — real backoff/timeout/pacing would make these tests take minutes.
 __setRetryBaseMsForTests(1);
 __setFetchTimeoutMsForTests(5);
 __setPageDelayMsForTests(0);
+
+// Tests in this file deliberately leave `globalThis.fetch` stubbed (the fetch
+// branch of apiFetch only runs when NO chrome global exists — bun shares one
+// global across every test file in the process, so a leaked stub or a leaked
+// chrome fake silently switches sibling files onto the wrong branch). Restore
+// everything this file touches when its window closes.
+const REAL_FETCH = globalThis.fetch;
+after(() => {
+  globalThis.fetch = REAL_FETCH;
+  __setTransport(null);
+  __setMaxPagesForTests(null);
+});
 
 const UID = '123';
 const P = 'igf.resume.'; // current (v2) checkpoint namespace
@@ -327,8 +340,14 @@ test('fetchAllUsers: partial page with next_max_id continues and checkpoints', a
 });
 
 test('fetchAllUsers: MAX_PAGES exhaustion throws limit (never completes short)', async () => {
-  // 500 pages, each with a next_max_id -> the loop hits the cap. The sync must
-  // FAIL (checkpoints intact), never diff/notify on a truncated list.
+  // Every page carries a next_max_id -> the loop hits the cap. The sync must
+  // FAIL (checkpoints intact), never diff/notify on a truncated list. The cap
+  // is driven through the test seam at 20 instead of the production 500: on
+  // Windows every sleep() costs a clamped timer tick, and the real cap makes
+  // exactly this walk a >5s storm that blows the test timeout and leaves the
+  // orphaned loop mutating the NEXT tests' fetch stubs. The invariant — loop
+  // stops at the cap, throws 'limit', call count == cap — is cap-agnostic.
+  __setMaxPagesForTests(20);
   let calls = 0;
   globalThis.fetch = async () => {
     calls += 1;
@@ -337,11 +356,15 @@ test('fetchAllUsers: MAX_PAGES exhaustion throws limit (never completes short)',
       text: async () => JSON.stringify({ status: 'ok', users: [{ username: 'u' + calls, pk: String(calls) }], next_max_id: 'm' + calls }),
     };
   };
-  await assert.rejects(
-    fetchAllUsers('following', UID, SESSION, {}),
-    (err) => err instanceof IgApiError && err.code === 'limit'
-  );
-  assert.equal(calls, 500);
+  try {
+    await assert.rejects(
+      fetchAllUsers('following', UID, SESSION, {}),
+      (err) => err instanceof IgApiError && err.code === 'limit'
+    );
+  } finally {
+    __setMaxPagesForTests(null);
+  }
+  assert.equal(calls, 20);
 });
 
 test('fetchAllUsers: repeated next_max_id stops with limit (no infinite loop)', async () => {

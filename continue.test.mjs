@@ -1,11 +1,11 @@
 // IG FollowGuard — auto-continue across MAX_PAGES segments.
 'use strict';
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { IgApiError } from './ig_api.mjs';
 
 const store = {};
-globalThis.chrome = {
+const CHROME_FAKE = {
   alarms: { clear: async () => {}, create: async () => {}, onAlarm: { addListener() {} } },
   storage: {
     onChanged: { addListener() {} },
@@ -33,7 +33,18 @@ globalThis.chrome = {
   notifications: { create: async () => {}, clear: async () => {}, onClicked: { addListener() {} } },
 };
 
-const { fetchListComplete, __setSegmentPauseMsForTests } = await import('./background.js');
+
+// chrome global confined to this file's window; background.js imported from
+// before() (see backup.test.mjs for the full rationale).
+let fetchListComplete;
+let __setSegmentPauseMsForTests;
+before(async () => {
+  globalThis.chrome = CHROME_FAKE;
+  ({ fetchListComplete, __setSegmentPauseMsForTests } = await import('./background.js?iso=continue'));
+});
+after(() => {
+  delete globalThis.chrome;
+});
 
 test('fetchListComplete resumes after limit without user action', async () => {
   __setSegmentPauseMsForTests(() => 0);

@@ -1,9 +1,9 @@
 // IG FollowGuard — account-isolation snapshot policy tests.
 'use strict';
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-globalThis.chrome = {
+const CHROME_FAKE = {
   alarms: { clear: async () => {}, create: async () => {}, onAlarm: { addListener() {} } },
   storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
   runtime: {
@@ -16,7 +16,17 @@ globalThis.chrome = {
   tabs: { create: async () => {}, query: async () => [], sendMessage: async () => ({ pong: true }), remove: async () => {}, get: async () => { throw new Error('gone'); } },
 };
 
-const { processSyncSnapshot } = await import('./background.js');
+
+// chrome global confined to this file's window; background.js imported from
+// before() (see backup.test.mjs for the full rationale).
+let processSyncSnapshot;
+before(async () => {
+  globalThis.chrome = CHROME_FAKE;
+  ({ processSyncSnapshot } = await import('./background.js?iso=isolation'));
+});
+after(() => {
+  delete globalThis.chrome;
+});
 
 const meta = (pk, name = '') => ({
   pk: String(pk), username: 'u', full_name: name, is_private: false, is_verified: false, profile_pic_url: '',
