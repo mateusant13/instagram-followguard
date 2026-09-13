@@ -1,0 +1,6 @@
+# IG FollowGuard — test-only bun config (never shipped, keep out of the
+# README staging list along with *.test.mjs). Preloads the network canary so
+# any unstubbed fetch — including an orphaned loop firing after a teardown —
+# throws instead of reaching the network.
+[test]
+preload = ["./test-canary.mjs"]

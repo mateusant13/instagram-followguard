@@ -4,6 +4,7 @@
 // These tests drive the REAL module through the handlers Chrome itself calls.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import manifest from './manifest.json';
 
 // In-memory chrome.storage.local (JSON round-trip like the real one).
 const store = new Map();
@@ -70,7 +71,7 @@ const CHROME_FAKE = {
     onStartup: { addListener: (cb) => { startupCb = cb; } },
     onInstalled: { addListener() {} },
     onConnect: { addListener() {} },
-    getManifest: () => ({ version: '0.6.5' }),
+    getManifest: () => ({ version: manifest.version }),
     lastError: null,
   },
   alarms: {

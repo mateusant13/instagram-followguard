@@ -109,6 +109,30 @@ test('apiFetch: plain 500 stays transient http', () => withTransport(async () =>
   );
 }));
 
+test('apiFetch: chrome defined + no transport fail-closes without touching fetch', async () => {
+  // The wall between the suite and the network: with a chrome global present
+  // (set by this file's before()) and no page transport installed, apiFetch
+  // must reject 'IGF interno' BEFORE any fetch — a counting stub proves zero
+  // calls, so a dropped guard can never silently reach instagram.com.
+  __setTransport(null);
+  const prevFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return { ok: true, status: 200, text: async () => '{}' };
+  };
+  try {
+    await assert.rejects(
+      apiFetch('/api/v1/friendships/123/following/?count=24', SESSION, {}),
+      (err) => err instanceof IgApiError && err.code === 'http' && /IGF interno/.test(err.message),
+    );
+    assert.equal(calls, 0, 'fail-close guard must throw before any fetch');
+  } finally {
+    globalThis.fetch = prevFetch;
+    __setTransport(null);
+  }
+});
+
 test('apiFetch: 400 with feedback_title-only body classifies as feedback-required', () => withTransport(async () => {
   // Real gate shape: 400 whose only signal is feedback_title — must NOT fall
   // through to transient 'http' (the in-loop ladder would hammer the gate).
